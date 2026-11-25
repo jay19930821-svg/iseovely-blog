@@ -870,7 +870,7 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
 
 def generate_with_gemini(contents, sys_prompt):
     last_err = None
-    for m_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+    for m_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash"]:
         try:
             resp = client.models.generate_content(
                 model=m_name,
