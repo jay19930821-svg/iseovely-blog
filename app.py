@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 커스텀 CSS (PC 프로그램과 동일한 컬러감 및 가독성 강화)
+# 커스텀 CSS (상단 여백 확보 + PC 프로그램 컬러감 유지)
 st.markdown("""
 <style>
     .block-container {
@@ -141,7 +141,7 @@ DEFAULT_STRATEGY_MEMO = """📌 [일 방문자 1만+ 달성 운영 매뉴얼]
 
 4️⃣ 자동화 프로그램 30초 발행 순서
 ① 상단에서 [👗 패션], [🔥 이슈], [🍽️ 맛집] 모드 선택
-② 기사 URL 입력 또는 맛집 사진 업로드
+② 실시간 1~20위 기사 선택 또는 맛집 사진 업로드
 ③ 생성 완료 후 [원고 서식 그대로 복사] → 에디터 Ctrl+V
 ④ [가공된 사진 ZIP 다운로드] → 압축 풀기 후 사진 배치 & 태그 30개 복사!
 
@@ -504,10 +504,9 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
     components.html(comp_html, height=48)
 
 # ==========================================
-# 이미지 가공 및 해외 서버 호환 크롤링 엔진
+# 이미지 가공 및 통합 실시간 뉴스 크롤링 엔진
 # ==========================================
 def process_unique_image(pil_img, apply_crop=True):
-    """중복 이미지 회피용 1% 미세 크롭(기사/블로그용) + 선명도·밝기 보정 + 슬림 화이트 프레임"""
     rgb_im = ImageOps.exif_transpose(pil_img).convert("RGB")
     w, h = rgb_im.size
     if apply_crop:
@@ -698,46 +697,68 @@ def extract_blog_text_and_photos(raw_url):
     lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
     return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
 
-def fetch_realtime_ent_news(keyword="", is_issue=False):
-    """해외 클라우드 서버(Streamlit)에서도 100% 작동하는 구글 뉴스 한국어 실시간 RSS 다중 수집기"""
+def fetch_top20_ent_news(custom_keyword=""):
+    """구글 뉴스 한국어 엔터테인먼트 토픽 랭킹 + 네이트 연예 랭킹에서 통합 1~20위 실시간 수집"""
     results = []
     seen_titles = set()
-    queries = []
-
-    if keyword.strip():
-        queries.append((f"키워드({keyword.strip()})", keyword.strip()))
-    if is_issue:
-        queries.append(("실시간연예이슈", "연예 방송 화제 근황"))
-    else:
-        queries.append(("실시간스타패션", "연예인 공항패션 사복패션 제작발표회"))
-
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     }
 
-    for tag_label, q_str in queries:
-        rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(q_str)}&hl=ko&gl=KR&ceid=KR:ko"
+    # 1) 사용자 지정 키워드가 있으면 해당 검색 RSS 우선 수집, 없으면 구글 뉴스 한국 엔터테인먼트 공식 랭킹 토픽 수집
+    if custom_keyword.strip():
+        rss_targets = [
+            (f"검색({custom_keyword.strip()})", f"https://news.google.com/rss/search?q={urllib.parse.quote(custom_keyword.strip())}&hl=ko&gl=KR&ceid=KR:ko")
+        ]
+    else:
+        rss_targets = [
+            ("구글연예", "https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=ko&gl=KR&ceid=KR:ko"),
+            ("스타패션", f"https://news.google.com/rss/search?q={urllib.parse.quote('연예인 공항패션 OR 사복패션 OR 제작발표회')}&hl=ko&gl=KR&ceid=KR:ko"),
+        ]
+
+    for src_tag, rss_u in rss_targets:
         try:
-            req = urllib.request.Request(rss_url, headers=headers)
+            req = urllib.request.Request(rss_u, headers=headers)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 root_xml = ET.fromstring(resp.read())
             for item in root_xml.findall(".//item")[:15]:
                 t_el, l_el = item.find("title"), item.find("link")
                 if t_el is not None and l_el is not None and t_el.text and l_el.text:
                     clean_t = html.unescape(t_el.text).strip()
-                    if clean_t not in seen_titles:
+                    if clean_t not in seen_titles and len(results) < 20:
                         seen_titles.add(clean_t)
                         results.append({
-                            "source": tag_label,
+                            "source": src_tag,
                             "title": clean_t,
                             "url": l_el.text.strip(),
                         })
         except Exception:
             continue
-    return results
+
+    # 2) 네이트 연예 랭킹에서도 추가 수집 (총 20위까지 채움)
+    if not custom_keyword.strip() and len(results) < 20:
+        try:
+            req_n = urllib.request.Request("https://news.nate.com/rank/interest?sc=ent", headers=headers)
+            with urllib.request.urlopen(req_n, timeout=8) as resp_n:
+                raw_b = resp_n.read()
+                try:
+                    h_str = raw_b.decode("euc-kr")
+                except UnicodeDecodeError:
+                    h_str = raw_b.decode("utf-8", errors="ignore")
+            for href, inner_html in re.findall(r'<a[^>]+href=["\']((?:https?:)?//news\.nate\.com/view/[^"\']+)["\'][^>]*>(.*?)</a>', h_str, re.DOTALL | re.IGNORECASE):
+                clean_u = ("https:" + href if href.startswith("//") else href).split("?")[0]
+                tit_m = re.search(r'class=["\'][^"\']*tit[^"\']*["\'][^>]*>(.*?)</', inner_html, re.DOTALL | re.IGNORECASE)
+                title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", tit_m.group(1) if tit_m else inner_html))).strip()
+                if len(title_txt) >= 10 and title_txt not in seen_titles and len(results) < 20:
+                    seen_titles.add(title_txt)
+                    results.append({"source": "네이트연예", "title": title_txt, "url": clean_u})
+        except Exception:
+            pass
+
+    return results[:20]
 
 # ==========================================
-# 세션 상태 초기화 (보관함 및 메모장)
+# 세션 상태 초기화
 # ==========================================
 if "active_mode" not in st.session_state:
     st.session_state["active_mode"] = "fashion"
@@ -747,6 +768,8 @@ if "selected_archive_idx" not in st.session_state:
     st.session_state["selected_archive_idx"] = 0
 if "strategy_memo" not in st.session_state:
     st.session_state["strategy_memo"] = DEFAULT_STRATEGY_MEMO
+if "crawled_news" not in st.session_state:
+    st.session_state["crawled_news"] = []
 
 # ==========================================
 # 메인 2단 레이아웃 (좌측: 3탭 올인원 작업창 / 우측: 운영 매뉴얼 메모장)
@@ -754,7 +777,7 @@ if "strategy_memo" not in st.session_state:
 left_col, right_col = st.columns([2.4, 1.0], gap="medium")
 
 with left_col:
-    # ★ 상단 3대 모드 전환 탭 바 (PC 버전 UI 그대로 구현) ★
+    # 상단 3대 모드 전환 탭 바
     t_col1, t_col2, t_col3 = st.columns(3, gap="small")
     with t_col1:
         if st.button(
@@ -783,7 +806,6 @@ with left_col:
 
     cur_mode = st.session_state["active_mode"]
 
-    # 모드 안내 배너
     if cur_mode == "fashion":
         st.markdown('<div class="mode-banner-fashion">👗 현재 모드: [패션·착장 분석 전용] — 아이템·브랜드·컬러 배색·실생활 코디 팁 중심으로 작성합니다.</div>', unsafe_allow_html=True)
     elif cur_mode == "issue":
@@ -803,44 +825,42 @@ with left_col:
     if cur_mode in ("fashion", "issue"):
         is_issue = (cur_mode == "issue")
 
-        with st.expander("🔥 실시간 연예·패션 기사 긁어오기 (해외 서버 차단 없는 실시간 뉴스 수집)", expanded=False):
-            c_kw1, c_kw2 = st.columns([3, 1])
-            with c_kw1:
-                kw_val = st.text_input(
-                    "검색 키워드 입력",
-                    value="예능 하이라이트" if is_issue else "공항패션",
-                    key="news_kw_input"
+        # 통합 1~20위 실시간 기사 수집 박스 (항상 바로 펼쳐져 한눈에 확인 가능)
+        with st.container(border=True):
+            st.markdown("**🔥 실시간 연예·패션 통합 랭킹 1~20위 긁어오기**")
+            nc1, nc2, nc3 = st.columns([2.2, 2.2, 1.4])
+            with nc1:
+                if st.button("🏆 실시간 통합 1~20위 불러오기", type="primary", use_container_width=True):
+                    with st.spinner("실시간 연예·패션 통합 1~20위 기사를 불러오는 중..."):
+                        st.session_state["crawled_news"] = fetch_top20_ent_news("")
+            with nc2:
+                custom_kw = st.text_input(
+                    "특정 연예인/키워드 검색",
+                    placeholder="특정 키워드 검색 시 입력 (비워두면 전체 1~20위)",
+                    label_visibility="collapsed"
                 )
-            with c_kw2:
-                st.write("")
-                st.write("")
-                if st.button("🔍 기사 수집하기", use_container_width=True):
-                    with st.spinner("실시간 뉴스 피드에서 기사를 가져오는 중..."):
-                        fetched = fetch_realtime_ent_news(kw_val, is_issue=is_issue)
-                        st.session_state["crawled_news"] = fetched
-                        if not fetched:
-                            st.warning("검색 결과가 없습니다. 다른 연예인 이름이나 키워드로 다시 검색해 주세요.")
+            with nc3:
+                if st.button("🔍 키워드 검색", use_container_width=True):
+                    with st.spinner(f"'{custom_kw}' 관련 기사 검색 중..."):
+                        st.session_state["crawled_news"] = fetch_top20_ent_news(custom_kw)
 
-            # 원클릭 추천 키워드 버튼
-            preset_kws = (
-                ["예능 하이라이트", "드라마 비하인드", "SNS 근황", "열애 결혼", "컴백 인터뷰"]
-                if is_issue
-                else ["공항패션", "출근길 패션", "제작발표회", "사복패션", "예능 착장"]
-            )
-            p_cols = st.columns(len(preset_kws))
-            for idx_p, p_kw in enumerate(preset_kws):
-                if p_cols[idx_p].button(p_kw, key=f"preset_{cur_mode}_{idx_p}", use_container_width=True):
-                    with st.spinner(f"'{p_kw}' 최신 기사 수집 중..."):
-                        st.session_state["crawled_news"] = fetch_realtime_ent_news(p_kw, is_issue=is_issue)
+            # 수집된 1~20위 기사 체크박스 목록 바로 표시
+            if st.session_state["crawled_news"]:
+                st.caption(f"총 {len(st.session_state['crawled_news'])}개의 실시간 기사가 수집되었습니다. 아래에서 원하는 기사를 체크한 뒤 [선택한 기사 URL 입력창에 넣기]를 눌러주세요.")
+                selected_urls = []
+                with st.container(height=230):
+                    for idx_n, item in enumerate(st.session_state["crawled_news"], start=1):
+                        if st.checkbox(f"{idx_n:02d}위. [{item['source']}] {item['title']}", key=f"news_chk_{idx_n}"):
+                            selected_urls.append(item["url"])
 
-            if st.session_state.get("crawled_news"):
-                news_map = {f"[{it['source']}] {it['title']}": it["url"] for it in st.session_state["crawled_news"]}
-                picked_list = st.multiselect("변환할 기사를 선택하세요 (여러 개 동시 선택 가능):", list(news_map.keys()))
-                if st.button("✅ 선택한 기사 URL 아래 입력창에 넣기", type="primary"):
-                    existing_u = st.session_state.get("url_input_val", "").strip()
-                    new_u = "\n".join([news_map[t] for t in picked_list])
-                    st.session_state["url_input_val"] = (existing_u + "\n" + new_u).strip() if existing_u else new_u
-                    st.rerun()
+                if st.button("✅ 선택한 기사 URL 아래 입력창에 넣기", type="primary", use_container_width=True):
+                    if not selected_urls:
+                        st.warning("위 목록에서 기사를 하나 이상 체크해 주세요!")
+                    else:
+                        existing_u = st.session_state.get("url_input_val", "").strip()
+                        new_u = "\n".join(selected_urls)
+                        st.session_state["url_input_val"] = (existing_u + "\n" + new_u).strip() if existing_u else new_u
+                        st.rerun()
 
         u_hdr1, u_hdr2 = st.columns([4, 1])
         with u_hdr1:
@@ -855,7 +875,7 @@ with left_col:
             value=st.session_state.get("url_input_val", ""),
             height=95,
             label_visibility="collapsed",
-            placeholder="https://blog.naver.com/... 또는 위 [실시간 기사 긁어오기]에서 선택한 주소를 입력하세요"
+            placeholder="https://blog.naver.com/... 또는 위 실시간 1~20위에서 선택한 기사 주소가 자동으로 들어갑니다"
         )
         st.session_state["url_input_val"] = url_box
 
@@ -1082,7 +1102,6 @@ with left_col:
         st.session_state["selected_archive_idx"] = sel_idx
         cur_item = st.session_state["archive_list"][sel_idx]
 
-        # 3. 완성된 원고 본문 헤더 및 원클릭 서식 복사 + 사진 ZIP 다운로드
         st.markdown(f"**3. 완성된 원고 본문 (공백 제외 {cur_item['char_count']}자 · 3색 파스텔 음영 & 컬러/인용구 적용)**")
 
         act_c1, act_c2 = st.columns(2)
@@ -1121,7 +1140,6 @@ with left_col:
             key=f"res_body_{sel_idx}"
         )
 
-        # 4. 네이버 유입 최적화 추천 태그 30개
         tag_cnt = len([t for t in cur_item["tags"].split(",") if t.strip()])
         st.markdown(f"**4. 네이버 유입 최적화 추천 태그 ({tag_cnt}개 — 아래 박스를 전체 선택해 복사하세요)**")
         st.text_area(
