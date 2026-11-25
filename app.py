@@ -504,9 +504,6 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
     components.html(comp_html, height=48)
 
 # ==========================================
-# 구글 뉴스 암호화 링크 해독 & 원문/고화질 사진 추출 엔진
-# ==========================================
-# ==========================================
 # 직통 원문 URL 추적 & 고화질 보도사진 추출 엔진
 # ==========================================
 def decode_google_news_url(source_url):
@@ -521,7 +518,6 @@ def decode_google_news_url(source_url):
         ("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8"),
     ]
 
-    # 1차: base64 토큰 내부 평문 URL 추출
     try:
         path_part = urllib.parse.urlparse(source_url).path.split("/")[-1]
         padded = path_part + "=" * (-len(path_part) % 4)
@@ -534,7 +530,6 @@ def decode_google_news_url(source_url):
     except Exception:
         pass
 
-    # 2차: Google News batchexecute 호출
     try:
         article_id = urllib.parse.urlparse(source_url).path.split("/")[-1]
         fetch_u = f"https://news.google.com/articles/{article_id}"
@@ -667,7 +662,6 @@ def scrape_single_url_raw(raw_url):
     tried_urls = set()
 
     def try_fetch_image_bytes(target_img_url):
-        # 네이트 썸네일 프록시(//thumbnews.nateimg.co.kr/view610///http://...)를 고화질 원본과 함께 시도
         candidates = [target_img_url]
         if "thumbnews.nateimg.co.kr" in target_img_url and "///" in target_img_url:
             orig_part = target_img_url.split("///", 1)[1]
@@ -801,7 +795,7 @@ def extract_blog_text_and_photos(raw_url, cached_meta=None):
                 root_xml = ET.fromstring(resp.read())
 
             collected_snippets = [fallback_summary] if fallback_summary else []
-            for item in root_xml.findall(".//item")[:6]:
+            for item in root_xml.findall(".//item")[:8]:
                 l_el = item.find("link")
                 d_el = item.find("description")
                 if d_el is not None and d_el.text:
@@ -810,10 +804,12 @@ def extract_blog_text_and_photos(raw_url, cached_meta=None):
                         collected_snippets.append(snip)
                 if l_el is not None and l_el.text:
                     t2, b2, imgs2, th2 = scrape_single_url_raw(l_el.text.strip())
-                    if len(b2.strip()) >= 150:
+                    if len(b2.strip()) >= 150 and len(imgs2) > 0:
                         return fallback_title, b2, imgs2, th2
+                    elif len(b2.strip()) >= 150 and not o_body:
+                        o_body = b2
 
-            combined_text = f"기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets)
+            combined_text = o_body if len(o_body.strip()) >= 150 else (f"기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets))
             if len(combined_text.strip()) >= 40:
                 return fallback_title, combined_text, img_bytes, ai_thumbs
         except Exception:
@@ -828,7 +824,7 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 
-    # 1순위: 네이트 연예 랭킹 (직통 URL이라 고화질 보도사진 100% 추출 가능!)
+    # 1순위: 네이트 연예 랭킹 (직통 URL이라 고화질 보도사진 100% 추출 가능)
     if mode_type == "news" and not custom_keyword.strip():
         try:
             req_n = urllib.request.Request("https://news.nate.com/rank/interest?sc=ent", headers=headers)
@@ -1264,7 +1260,7 @@ with left_col:
                         st.error(f"맛집 원고 생성 중 오류 발생: {e}")
 
     # ==========================================================
-    # 2. 현재 탭 전용 생성 완료 보관함 & 3. 완성 원고 & 4. 태그 30개
+    # 2. 현재 탭 전용 생성 완료 보관함 & 3. 크롤링 사진 갤러리 & 4. 원고/태그
     # ==========================================================
     st.divider()
     mode_kor = {"fashion": "👗 패션·착장", "issue": "🔥 연예인 이슈", "food": "🍽️ 맛집 후기"}[cur_mode]
@@ -1295,6 +1291,20 @@ with left_col:
         cur_item = st.session_state[mode_archive_key][sel_idx]
         item_uid = cur_item["id"]
 
+        # ★ 크롤링 및 가공된 사진 바로 보기 갤러리 (접기 없이 즉시 표시) ★
+        st.markdown(f"**🖼️ 크롤링 및 보정 완료된 고화질 사진 ({len(cur_item['images'])}장)**")
+        if cur_item["images"]:
+            with st.container(border=True):
+                cols_per_row = 5
+                for row_start in range(0, len(cur_item["images"]), cols_per_row):
+                    row_imgs = cur_item["images"][row_start:row_start + cols_per_row]
+                    g_cols = st.columns(cols_per_row)
+                    for col_i, img_b in enumerate(row_imgs):
+                        pic_num = row_start + col_i + 1
+                        g_cols[col_i].image(img_b, caption=f"[사진 {pic_num}]", use_container_width=True)
+        else:
+            st.caption("※ 이 기사/링크에서는 추출 가능한 본문 이미지가 없었습니다.")
+
         st.markdown(f"**3. 완성된 원고 본문 (공백 제외 {cur_item['char_count']}자 · 3색 파스텔 음영 & 컬러/인용구 적용)**")
 
         act_c1, act_c2 = st.columns(2)
@@ -1319,12 +1329,6 @@ with left_col:
                     use_container_width=True,
                     key=f"zip_dl_{item_uid}"
                 )
-
-        if cur_item["images"]:
-            with st.expander(f"🖼️ 가공된 고화질 사진 {len(cur_item['images'])}장 미리보기"):
-                p_cols = st.columns(min(5, len(cur_item["images"])))
-                for img_i, img_b in enumerate(cur_item["images"]):
-                    p_cols[img_i % 5].image(img_b, caption=f"사진 {img_i+1}", use_container_width=True)
 
         st.text_area(
             "완성된 원고 본문",
