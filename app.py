@@ -860,8 +860,8 @@ def extract_blog_text_and_photos(raw_url):
     return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
 
 def generate_with_gemini(contents, sys_prompt):
-    last_err = None
-    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.5-pro"]
+    err_logs = []
+    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash"]
     for attempt in range(3):
         for m_name in models_to_try:
             try:
@@ -873,12 +873,12 @@ def generate_with_gemini(contents, sys_prompt):
                 if resp and resp.text:
                     return resp.text
             except Exception as e:
-                last_err = e
                 err_str = str(e)
+                err_logs.append(f"[{m_name}] {err_str[:120]}")
                 if "503" in err_str or "429" in err_str or "UNAVAILABLE" in err_str:
-                    time.sleep(2.5)
+                    time.sleep(4 * (attempt + 1))
                 continue
-    raise RuntimeError(f"AI 원고 생성 실패 (구글 서버 일시 혼잡, 잠시 후 다시 눌러주세요): {last_err}")
+    raise RuntimeError(" / ".join(dict.fromkeys(err_logs)))
 
 # ==========================================
 # 세션 상태 초기화 (탭별 100% 독립 저장소)
