@@ -861,52 +861,49 @@ def extract_blog_text_and_photos(raw_url):
 
 def generate_with_gemini(contents, sys_prompt):
     err_logs = []
-    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash"]
+    # 내 API 키에서 실제로 지원되는 generateContent 모델 목록 자동 조회 + 우선순위 정렬
+    preferred = ["gemini-3.5-flash", "gemini-3.5-pro-preview", "gemini-2.5-pro", "gemini-3.5-flash-lite"]
+    available_models = list(preferred)
+    try:
+        for m in client.models.list():
+            m_id = getattr(m, "name", "").replace("models/", "")
+            methods = getattr(m, "supported_actions", []) or getattr(m, "supported_generation_methods", [])
+            if m_id and "gemini" in m_id and "embed" not in m_id and "imagen" not in m_id and "veo" not in m_id:
+                if not methods or "generateContent" in methods:
+                    if m_id not in available_models:
+                        available_models.append(m_id)
+    except Exception:
+        pass
 
-    # 1단계: 텍스트 + 핵심 사진(최대 4장)으로 경량화 호출
     trimmed_contents = []
     img_added = 0
     for item in contents:
         if isinstance(item, str):
             trimmed_contents.append(item)
-        else:
-            if img_added < 4:
-                trimmed_contents.append(item)
-                img_added += 1
+        elif img_added < 4:
+            trimmed_contents.append(item)
+            img_added += 1
+
+    text_only_contents = [c for c in contents if isinstance(c, str) and not c.startswith("[첨부 사진")]
 
     for attempt in range(2):
-        for m_name in models_to_try:
+        for m_name in available_models[:5]:
             try:
                 resp = client.models.generate_content(
                     model=m_name,
-                    contents=trimmed_contents,
+                    contents=trimmed_contents if attempt == 0 else text_only_contents,
                     config=types.GenerateContentConfig(system_instruction=sys_prompt),
                 )
                 if resp and resp.text:
                     return resp.text
             except Exception as e:
                 err_str = str(e)
-                err_logs.append(f"[{m_name}] {err_str[:100]}")
+                err_logs.append(f"[{m_name}] {err_str[:90]}")
                 if "503" in err_str or "429" in err_str or "UNAVAILABLE" in err_str:
-                    time.sleep(3)
+                    time.sleep(5)
                 continue
 
-    # 2단계: 구글 서버 과부하(503) 지속 시 텍스트 전용으로 즉시 우회 생성 (원고 끊김 방지)
-    text_only_contents = [c for c in contents if isinstance(c, str) and not c.startswith("[첨부 사진")]
-    for m_name in models_to_try:
-        try:
-            resp = client.models.generate_content(
-                model=m_name,
-                contents=text_only_contents,
-                config=types.GenerateContentConfig(system_instruction=sys_prompt),
-            )
-            if resp and resp.text:
-                return resp.text
-        except Exception as e:
-            err_logs.append(f"[{m_name}-text] {str(e)[:100]}")
-            time.sleep(2)
-
-    raise RuntimeError(" / ".join(dict.fromkeys(err_logs)))
+    raise RuntimeError("구글 AI 서버 일시 트래픽 폭주(503)입니다. 2~3분 후 다시 눌러주세요! 상세: " + " / ".join(dict.fromkeys(err_logs)))
 
 # ==========================================
 # 세션 상태 초기화 (탭별 100% 독립 저장소)
