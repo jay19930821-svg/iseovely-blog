@@ -204,7 +204,7 @@ FASHION_FORMAT_RULES = (
     "각 인물 섹션마다 서로 다른 코디가 담긴 2~3장([사진 1], [사진 3] 등)을 3~5줄 글과 번갈아 배치하고, "
     "나머지 사진 속 착장(다른 컬러·아이템)과 실생활 코디 조합·컬러 배색·소품 팁을 꼭 포함해!\n"
     "4. [첨부 사진 실제 착장·색상 100% 정확 일치]: "
-    "첨부된 실제 사진을 직접 확인하고 각 [사진 N] 위아래에는 해당 사진에 실제로 보이는 옷 색상·아이템·핏만 묘사해.\n"
+    "첨부된 실제 사진이 있으면 직접 확인하고 각 [사진 N] 위아래에는 해당 사진에 실제로 보이는 옷 색상·아이템·핏만 묘사해. (첨부 사진이 0장이면 [사진 N] 표기 없이 본문만 작성해.)\n"
     + COMMON_RICH_FORMAT_RULES +
     "7. [맨 마지막 11pt 출처 표기 & 태그 30개]: "
     "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 검색 태그 30개를 쉼표로 구분해 출력해."
@@ -223,7 +223,7 @@ ISSUE_FORMAT_RULES = (
     "   [제목 추천 2 - 상위 5% 검색 유입형] (인물명 + 핵심 사건/방송 키워드 중심의 클릭을 부르는 제목)\n"
     "   그 다음 줄에 '===' 를 적고 자기소개 없이 바로 본문 첫 문장을 시작해.\n"
     "4. [첨부 사진 장면·표정·상황 100% 정확 일치]: "
-    "첨부된 실제 사진을 직접 확인하고 각 소제목 섹션마다 [사진 1]~[사진 N]을 3~5줄 글과 번갈아 배치하며 해당 사진 속 실제 장면·표정과 일치하게 묘사해.\n"
+    "첨부된 실제 사진이 있으면 직접 확인하고 각 소제목 섹션마다 [사진 1]~[사진 N]을 3~5줄 글과 번갈아 배치하며 해당 사진 속 실제 장면·표정과 일치하게 묘사해. (첨부 사진이 0장이면 [사진 N] 표기 없이 작성해.)\n"
     + COMMON_RICH_FORMAT_RULES +
     "7. [맨 마지막 11pt 출처 표기 & 태그 30개]: "
     "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 인물·이슈·방송 관련 검색 태그 30개를 쉼표로 구분해 출력해."
@@ -503,10 +503,9 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
     components.html(comp_html, height=48)
 
 # ==========================================
-# 구글 뉴스 암호화 링크(CBMi...) 실제 URL 해독기
+# 구글 뉴스 암호화 링크 해독 & 원문 추적 엔진
 # ==========================================
 def decode_google_news_url(source_url):
-    """news.google.com/rss/articles/CBMi... 주소를 실제 언론사/블로그 원문 URL로 변환"""
     if "news.google.com" not in source_url:
         return source_url
 
@@ -514,7 +513,6 @@ def decode_google_news_url(source_url):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     }
 
-    # 1차: base64 토큰 내부에 평문 URL이 포함된 구형/하이브리드 포맷 추출
     try:
         path_part = urllib.parse.urlparse(source_url).path.split("/")[-1]
         padded = path_part + "=" * (-len(path_part) % 4)
@@ -527,7 +525,6 @@ def decode_google_news_url(source_url):
     except Exception:
         pass
 
-    # 2차: Google News batchexecute API를 통한 신형 CBMi 토큰 해독
     try:
         article_id = urllib.parse.urlparse(source_url).path.split("/")[-1]
         fetch_u = f"https://news.google.com/articles/{article_id}"
@@ -563,9 +560,6 @@ def decode_google_news_url(source_url):
 
     return source_url
 
-# ==========================================
-# 이미지 가공 및 본문/사진 파싱 엔진
-# ==========================================
 def process_unique_image(pil_img, apply_crop=True):
     rgb_im = ImageOps.exif_transpose(pil_img).convert("RGB")
     w, h = rgb_im.size
@@ -595,29 +589,36 @@ def normalize_blog_url(raw_url):
         u = u.replace("https://blog.naver.com/", "https://m.blog.naver.com/").replace("http://blog.naver.com/", "https://m.blog.naver.com/")
     return u
 
-def extract_blog_text_and_photos(raw_url):
+def scrape_single_url_raw(raw_url):
+    """단일 URL에서 제목·본문·고화질 사진 추출 (해외 서버 차단 시 빈 결과 반환 후 폴백 처리)"""
     decoded_url = decode_google_news_url(raw_url.strip())
     url = normalize_blog_url(decoded_url)
+    if "news.google.com" in url:
+        return "", "", [], []
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        final_url = resp.geturl()
-        raw_bytes = resp.read()
-        try:
-            page_html = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            page_html = raw_bytes.decode("euc-kr", errors="ignore")
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            final_url = resp.geturl()
+            raw_bytes = resp.read()
+            try:
+                page_html = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                page_html = raw_bytes.decode("euc-kr", errors="ignore")
+    except Exception:
+        return "", "", [], []
 
     og_title = re.search(r'(?:property|name)=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
     if og_title:
         page_title = html.unescape(og_title.group(1)).strip()
     else:
         t_m = re.search(r"<title>(.*?)</title>", page_html, re.IGNORECASE | re.DOTALL)
-        page_title = html.unescape(t_m.group(1)).strip() if t_m else "포스팅 원문"
+        page_title = html.unescape(t_m.group(1)).strip() if t_m else ""
 
     body_html = ""
     se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
@@ -749,11 +750,50 @@ def extract_blog_text_and_photos(raw_url):
     lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
     return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
 
+def extract_blog_text_and_photos(raw_url, cached_meta=None):
+    """
+    1순위: URL 원문 직접 추출
+    2순위: 암호화 링크/해외 IP 차단 시 동일 기사 제목으로 관련 보도/블로그 원문을 자동 추적하여 결합 추출
+    """
+    p_title, o_body, img_bytes, ai_thumbs = scrape_single_url_raw(raw_url)
+    if len(o_body.strip()) >= 150:
+        return p_title, o_body, img_bytes, ai_thumbs
+
+    # 폴백: 수집기에서 미리 확보해 둔 기사 제목 & 요약 활용
+    fallback_title = (cached_meta or {}).get("title", "") or p_title
+    fallback_summary = (cached_meta or {}).get("summary", "")
+
+    if fallback_title:
+        clean_search_q = re.sub(r"\s*-\s*[^-]+$", "", fallback_title).strip()
+        try:
+            rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(clean_search_q)}&hl=ko&gl=KR&ceid=KR:ko"
+            req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                root_xml = ET.fromstring(resp.read())
+
+            collected_snippets = [fallback_summary] if fallback_summary else []
+            for item in root_xml.findall(".//item")[:5]:
+                l_el = item.find("link")
+                d_el = item.find("description")
+                if d_el is not None and d_el.text:
+                    snip = re.sub(r"<[^>]+>", " ", html.unescape(d_el.text)).strip()
+                    if snip and snip not in collected_snippets:
+                        collected_snippets.append(snip)
+                if l_el is not None and l_el.text and len(o_body.strip()) < 150:
+                    t2, b2, imgs2, th2 = scrape_single_url_raw(l_el.text.strip())
+                    if len(b2.strip()) >= 150:
+                        return fallback_title, b2, imgs2, th2
+
+            combined_text = f"기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets)
+            if len(combined_text.strip()) >= 40:
+                return fallback_title, combined_text, img_bytes, ai_thumbs
+        except Exception:
+            if fallback_title:
+                return fallback_title, f"기사 제목: {fallback_title}\n{fallback_summary}", img_bytes, ai_thumbs
+
+    return p_title, o_body, img_bytes, ai_thumbs
+
 def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
-    """
-    mode_type == 'news': 실시간 연예·패션 통합 랭킹 1~20위
-    mode_type == 'fashion_blog': 연예인 패션 블로그 글쓰는 인기 블로거 1~20위
-    """
     results = []
     seen_titles = set()
     headers = {
@@ -783,15 +823,26 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 root_xml = ET.fromstring(resp.read())
             for item in root_xml.findall(".//item")[:22]:
-                t_el, l_el = item.find("title"), item.find("link")
+                t_el, l_el, d_el = item.find("title"), item.find("link"), item.find("description")
                 if t_el is not None and l_el is not None and t_el.text and l_el.text:
                     clean_t = html.unescape(t_el.text).strip()
+                    raw_link = l_el.text.strip()
+                    summary_txt = ""
+                    if d_el is not None and d_el.text:
+                        desc_unesc = html.unescape(d_el.text)
+                        summary_txt = re.sub(r"<[^>]+>", " ", desc_unesc).strip()
+                        # description 내 실제 언론사/블로그 직링크가 있으면 우선 추출
+                        real_href = re.search(r'href=["\'](https?://(?!(?:news\.google|www\.google))[^"\']+)["\']', desc_unesc)
+                        if real_href:
+                            raw_link = real_href.group(1)
+
                     if clean_t not in seen_titles and len(results) < 20:
                         seen_titles.add(clean_t)
                         results.append({
                             "source": src_tag,
                             "title": clean_t,
-                            "url": l_el.text.strip(),
+                            "url": raw_link,
+                            "summary": summary_txt,
                         })
         except Exception:
             continue
@@ -811,14 +862,13 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
                 title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", tit_m.group(1) if tit_m else inner_html))).strip()
                 if len(title_txt) >= 10 and title_txt not in seen_titles and len(results) < 20:
                     seen_titles.add(title_txt)
-                    results.append({"source": "네이트연예", "title": title_txt, "url": clean_u})
+                    results.append({"source": "네이트연예", "title": title_txt, "url": clean_u, "summary": title_txt})
         except Exception:
             pass
 
     return results[:20]
 
 def generate_with_gemini(contents, sys_prompt):
-    """안정적인 최신 제미나이 모델 순차 호출 및 명확한 에러 반환"""
     last_err = None
     for m_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
         try:
@@ -847,6 +897,8 @@ if "strategy_memo" not in st.session_state:
     st.session_state["strategy_memo"] = DEFAULT_STRATEGY_MEMO
 if "crawled_news" not in st.session_state:
     st.session_state["crawled_news"] = []
+if "url_meta_map" not in st.session_state:
+    st.session_state["url_meta_map"] = {}
 
 # ==========================================
 # 메인 2단 레이아웃
@@ -938,18 +990,26 @@ with left_col:
 
             if st.session_state["crawled_news"]:
                 st.caption(f"총 {len(st.session_state['crawled_news'])}개의 인기 글/기사가 수집되었습니다. 체크 후 아래 버튼을 눌러주세요.")
-                selected_urls = []
+                selected_items = []
                 with st.container(height=230):
                     for idx_n, item in enumerate(st.session_state["crawled_news"], start=1):
                         if st.checkbox(f"{idx_n:02d}위. [{item['source']}] {item['title']}", key=f"news_chk_{idx_n}"):
-                            selected_urls.append(item["url"])
+                            selected_items.append(item)
 
                 if st.button("✅ 선택한 기사/블로그 URL 아래 입력창에 넣기", type="primary", use_container_width=True):
-                    if not selected_urls:
+                    if not selected_items:
                         st.warning("위 목록에서 항목을 하나 이상 체크해 주세요!")
                     else:
                         existing_u = st.session_state.get("url_input_val", "").strip()
-                        new_u = "\n".join(selected_urls)
+                        picked_urls = []
+                        for it in selected_items:
+                            u_str = it["url"]
+                            picked_urls.append(u_str)
+                            st.session_state["url_meta_map"][u_str] = {
+                                "title": it["title"],
+                                "summary": it.get("summary", ""),
+                            }
+                        new_u = "\n".join(picked_urls)
                         st.session_state["url_input_val"] = (existing_u + "\n" + new_u).strip() if existing_u else new_u
                         st.rerun()
 
@@ -989,9 +1049,10 @@ with left_col:
                 for idx, target_u in enumerate(urls, start=1):
                     with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 원문 추출 및 상위 5% 황금 글자 수 원고 작성 중..."):
                         try:
-                            p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u)
-                            if len(o_body.strip()) < 60:
-                                raise ValueError("해당 링크에서 본문 텍스트를 읽어오지 못했습니다. 다른 기사나 블로그 URL을 선택해 주세요.")
+                            meta_info = st.session_state["url_meta_map"].get(target_u)
+                            p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u, cached_meta=meta_info)
+                            if len(o_body.strip()) < 25:
+                                raise ValueError("해당 링크에서 원문 내용을 가져오지 못했습니다. 다른 기사나 블로그 URL을 선택해 주세요.")
 
                             img_cnt = len(img_bytes_list)
                             mode_inst = (
@@ -999,18 +1060,23 @@ with left_col:
                                 if is_issue
                                 else "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
                             )
+                            photo_guide = (
+                                f"4. 첨부된 실제 사진 {img_cnt}장을 확인하고 각 [사진 N] 위아래에 실제 장면·착장과 일치하는 내용을 써줘.\n"
+                                if img_cnt > 0
+                                else "4. 본문 중간에 [사진 1], [사진 2] 등 사진 번호 표기는 넣지 말고 3~5줄 문단과 인용구·형광펜 서식만 깔끔하게 구성해 줘.\n"
+                            )
                             prompt_txt = (
                                 f"[중요 지시사항]\n"
-                                f"1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 작성해 줘!\n"
+                                f"1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 풍성하게 작성해 줘!\n"
                                 f"{mode_inst}"
                                 f"3. 자기소개 멘트 절대 금지! 맨 위 [제목 추천 1], [제목 추천 2] 직후 바로 핵심 내용으로 시작해.\n"
-                                f"4. 첨부된 실제 사진 {img_cnt}장을 확인하고 각 [사진 N] 위아래에 실제 장면·착장과 일치하는 내용을 써줘.\n"
-                                f"5. 한 줄 20자 이내 줄바꿈, 3~5줄 문단 + [사진 N] 리듬 유지, 3색 파스텔 형광펜([[ ]], [b[ ]b], [p[ ]p]) 적용!\n"
+                                f"{photo_guide}"
+                                f"5. 한 줄 20자 이내 줄바꿈, 3~5줄 문단 리듬 유지, 3색 파스텔 형광펜([[ ]], [b[ ]b], [p[ ]p]) 적용!\n"
                                 f"6. 마지막 줄에 '출처-' 표기 후 바로 아래 '===TAGS===' 다음 줄에 태그 30개를 쉼표로 구분해 뽑아줘.\n"
                             )
                             if extra_note.strip():
                                 prompt_txt += f"[추가 강조 요청]: {extra_note.strip()}\n"
-                            prompt_txt += f"\n[원본 제목]: {p_title}\n\n[참고 원문 및 사진 순서표]:\n{o_body}"
+                            prompt_txt += f"\n[원본 제목]: {p_title}\n\n[참고 원문]:\n{o_body}"
 
                             contents = [prompt_txt]
                             for i_idx, th in enumerate(ai_thumbs[:10], start=1):
