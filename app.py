@@ -862,22 +862,50 @@ def extract_blog_text_and_photos(raw_url):
 def generate_with_gemini(contents, sys_prompt):
     err_logs = []
     models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash"]
-    for attempt in range(3):
+
+    # 1단계: 텍스트 + 핵심 사진(최대 4장)으로 경량화 호출
+    trimmed_contents = []
+    img_added = 0
+    for item in contents:
+        if isinstance(item, str):
+            trimmed_contents.append(item)
+        else:
+            if img_added < 4:
+                trimmed_contents.append(item)
+                img_added += 1
+
+    for attempt in range(2):
         for m_name in models_to_try:
             try:
                 resp = client.models.generate_content(
                     model=m_name,
-                    contents=contents,
+                    contents=trimmed_contents,
                     config=types.GenerateContentConfig(system_instruction=sys_prompt),
                 )
                 if resp and resp.text:
                     return resp.text
             except Exception as e:
                 err_str = str(e)
-                err_logs.append(f"[{m_name}] {err_str[:120]}")
+                err_logs.append(f"[{m_name}] {err_str[:100]}")
                 if "503" in err_str or "429" in err_str or "UNAVAILABLE" in err_str:
-                    time.sleep(4 * (attempt + 1))
+                    time.sleep(3)
                 continue
+
+    # 2단계: 구글 서버 과부하(503) 지속 시 텍스트 전용으로 즉시 우회 생성 (원고 끊김 방지)
+    text_only_contents = [c for c in contents if isinstance(c, str) and not c.startswith("[첨부 사진")]
+    for m_name in models_to_try:
+        try:
+            resp = client.models.generate_content(
+                model=m_name,
+                contents=text_only_contents,
+                config=types.GenerateContentConfig(system_instruction=sys_prompt),
+            )
+            if resp and resp.text:
+                return resp.text
+        except Exception as e:
+            err_logs.append(f"[{m_name}-text] {str(e)[:100]}")
+            time.sleep(2)
+
     raise RuntimeError(" / ".join(dict.fromkeys(err_logs)))
 
 # ==========================================
