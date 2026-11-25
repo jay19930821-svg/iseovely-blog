@@ -1083,7 +1083,7 @@ with left_col:
                     if not selected_items:
                         st.warning("위 목록에서 항목을 하나 이상 체크해 주세요!")
                     else:
-                        existing_u = st.session_state.get(mode_urls_key, "").strip()
+                        existing_u = st.session_state.get(f"textarea_url_{cur_mode}", "").strip()
                         picked_urls = []
                         for it in selected_items:
                             u_str = it["url"]
@@ -1093,7 +1093,9 @@ with left_col:
                                 "summary": it.get("summary", ""),
                             }
                         new_u = "\n".join(picked_urls)
-                        st.session_state[mode_urls_key] = (existing_u + "\n" + new_u).strip() if existing_u else new_u
+                        combined_u = (existing_u + "\n" + new_u).strip() if existing_u else new_u
+                        st.session_state[mode_urls_key] = combined_u
+                        st.session_state[f"textarea_url_{cur_mode}"] = combined_u
                         st.rerun()
 
         u_hdr1, u_hdr2 = st.columns([4, 1])
@@ -1102,11 +1104,14 @@ with left_col:
         with u_hdr2:
             if st.button("🧹 URL 비우기", use_container_width=True, key=f"btn_clear_{cur_mode}"):
                 st.session_state[mode_urls_key] = ""
+                st.session_state[f"textarea_url_{cur_mode}"] = ""
                 st.rerun()
+
+        if f"textarea_url_{cur_mode}" not in st.session_state:
+            st.session_state[f"textarea_url_{cur_mode}"] = st.session_state.get(mode_urls_key, "")
 
         url_box = st.text_area(
             "URL 입력",
-            value=st.session_state.get(mode_urls_key, ""),
             height=95,
             label_visibility="collapsed",
             placeholder="https://blog.naver.com/... 또는 위 실시간 1~20위에서 선택한 주소가 자동으로 들어갑니다",
