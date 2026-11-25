@@ -133,13 +133,13 @@ DEFAULT_STRATEGY_MEMO = """📌 [일 방문자 1만+ 달성 운영 매뉴얼]
 • [밤 22:00 ~ 24:00] 저녁 포토월·인스타 업로드 (다음 날 새벽 홈피드 유입)
 
 3️⃣ 모드별 소재 활용 팁
-• [👗 패션·착장 모드]: 네이트 패션/연예 1~20위 + 패션 블로그 인기 1~20위 동시 활용
-• [🔥 연예인 이슈 모드]: 네이트 연예 실시간 랭킹 1~20위 & 맞춤 추천 키워드
+• [👗 패션·착장 모드]: 네이트 실시간 관심뉴스 1~30위 + 패션 블로그 인기 1~20위 동시 활용
+• [🔥 연예인 이슈 모드]: 네이트 연예 실시간 급상승 관심뉴스 1~30위 선택 일괄 변환
 • [🍽️ 맛집 후기 모드]: 직접 찍은 사진 불러오기 → 체험단 가이드라인 입력 후 바로 생성
 
 4️⃣ 자동화 프로그램 30초 발행 순서
 ① 상단에서 [👗 패션], [🔥 이슈], [🍽️ 맛집] 모드 선택
-② 네이트 1~20위 기사 또는 패션 블로그 선택 / 맛집 사진 업로드
+② 네이트 실시간 1~30위 기사 선택 또는 맛집 사진 업로드
 ③ 생성 완료 후 [원고 서식 그대로 복사] → 에디터 Ctrl+V
 ④ [가공된 사진 ZIP 다운로드] → 압축 풀기 후 사진 배치 & 태그 30개 복사!
 
@@ -502,7 +502,7 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
     components.html(comp_html, height=48)
 
 # ==========================================
-# 네이트 연예 & 네이버 블로그 직통 원문/사진 추출 엔진
+# 네이트 연예 실시간 급상승 관심뉴스 1~30위 & 본문·사진 추출 엔진
 # ==========================================
 def process_unique_image(pil_img, apply_crop=True):
     rgb_im = ImageOps.exif_transpose(pil_img).convert("RGB")
@@ -534,7 +534,6 @@ def normalize_target_url(raw_url):
     return u
 
 def fetch_html_smart(target_url, referer="https://news.nate.com/"):
-    """직통 요청 후 해외 IP 차단/빈 응답 시 자동 우회 프록시(jina/allorigins)까지 폴백해 HTML 확보"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -555,7 +554,6 @@ def fetch_html_smart(target_url, referer="https://news.nate.com/"):
     except Exception:
         pass
 
-    # 해외 IP 차단 시 공개 웹 프록시를 통한 원문 HTML 수집
     try:
         proxy_u = f"https://api.allorigins.win/raw?url={urllib.parse.quote(target_url, safe='')}"
         req_p = urllib.request.Request(proxy_u, headers={"User-Agent": headers["User-Agent"]})
@@ -571,6 +569,86 @@ def fetch_html_smart(target_url, referer="https://news.nate.com/"):
         pass
 
     return target_url, ""
+
+def fetch_nate_ent_top30():
+    """네이트 연예 실시간 급상승 관심뉴스 1~30위(news.nate.com/rank/interest?sc=ent) 정확 수집"""
+    results = []
+    seen_urls = set()
+    seen_titles = set()
+
+    for rank_url in [
+        "https://news.nate.com/rank/interest?sc=ent",
+        "https://m.news.nate.com/rank/interest?sc=ent",
+    ]:
+        _, h_str = fetch_html_smart(rank_url)
+        if not h_str:
+            continue
+
+        # 메인 랭킹 리스트 영역 우선 추출 (사이드바 뉴스 혼입 방지)
+        main_area = h_str
+        area_m = re.search(r'(?:class=["\'][^"\']*(?:postRankSubjectList|mduSubjectList|rank_list|interest_list)[^"\']*["\']|id=["\']newsContents["\'])(.*)', h_str, re.DOTALL | re.IGNORECASE)
+        if area_m:
+            main_area = area_m.group(1)
+
+        matches = re.findall(
+            r'<a[^>]+href=["\']((?:https?:)?//(?:m\.)?news\.nate\.com/view/[^"\']+)["\'][^>]*>(.*?)</a>',
+            main_area,
+            re.DOTALL | re.IGNORECASE
+        )
+        for href, inner_html in matches:
+            clean_u = ("https:" + href if href.startswith("//") else href).split("?")[0]
+            clean_u = clean_u.replace("://m.news.nate.com/", "://news.nate.com/")
+            if clean_u in seen_urls:
+                continue
+
+            tit_m = re.search(r'class=["\'][^"\']*(?:tit|subject|title)[^"\']*["\'][^>]*>(.*?)</', inner_html, re.DOTALL | re.IGNORECASE)
+            raw_t = tit_m.group(1) if tit_m else inner_html
+            title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", raw_t))).strip()
+            # 앞에 붙은 순위 숫자(예: "1 ", "01 ") 제거
+            title_txt = re.sub(r"^\d{1,2}\s+", "", title_txt).strip()
+
+            if len(title_txt) >= 10 and title_txt not in seen_titles:
+                seen_urls.add(clean_u)
+                seen_titles.add(title_txt)
+                results.append({
+                    "source": "네이트연예",
+                    "title": title_txt,
+                    "url": clean_u,
+                })
+                if len(results) >= 30:
+                    return results[:30]
+
+        if len(results) >= 20:
+            break
+
+    return results[:30]
+
+def fetch_fashion_blogs_top20():
+    """탭 1 전용: 네이버 연예인 패션 인기 블로그 글 1~20위 수집기"""
+    results = []
+    seen_titles = set()
+    q_blog = 'site:blog.naver.com "연예인" ("패션" OR "공항패션" OR "사복패션" OR "착장")'
+    rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(q_blog)}&hl=ko&gl=KR&ceid=KR:ko"
+    try:
+        req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            root_xml = ET.fromstring(resp.read())
+        for item in root_xml.findall(".//item")[:22]:
+            t_el, l_el, d_el = item.find("title"), item.find("link"), item.find("description")
+            if t_el is not None and l_el is not None and t_el.text and l_el.text:
+                clean_t = html.unescape(t_el.text).strip()
+                raw_link = l_el.text.strip()
+                if d_el is not None and d_el.text:
+                    desc_unesc = html.unescape(d_el.text)
+                    real_href = re.search(r'href=["\'](https?://(?!(?:news\.google|www\.google))[^"\']+)["\']', desc_unesc)
+                    if real_href:
+                        raw_link = real_href.group(1)
+                if clean_t not in seen_titles and len(results) < 20:
+                    seen_titles.add(clean_t)
+                    results.append({"source": "패션블로그", "title": clean_t, "url": raw_link})
+    except Exception:
+        pass
+    return results[:20]
 
 def extract_blog_text_and_photos(raw_url):
     url = normalize_target_url(raw_url)
@@ -737,93 +815,6 @@ def extract_blog_text_and_photos(raw_url):
     lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
     return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
 
-def fetch_nate_only_news(custom_keyword="", is_fashion=False):
-    """네이트 연예 랭킹(1~20위) + EUC-KR 검색 전용 수집기 (해외 서버 자동 우회 포함)"""
-    results = []
-    seen_urls = set()
-    seen_titles = set()
-
-    def parse_nate_html(target_url, source_label):
-        _, h_str = fetch_html_smart(target_url)
-        if not h_str:
-            return
-
-        matches = re.findall(
-            r'<a[^>]+href=["\']((?:https?:)?//(?:m\.)?news\.nate\.com/view/[^"\']+)["\'][^>]*>(.*?)</a>',
-            h_str,
-            re.DOTALL | re.IGNORECASE
-        )
-        for href, inner_html in matches:
-            clean_u = ("https:" + href if href.startswith("//") else href).split("?")[0]
-            clean_u = clean_u.replace("://m.news.nate.com/", "://news.nate.com/")
-            if clean_u in seen_urls:
-                continue
-
-            tit_m = re.search(r'class=["\'][^"\']*(?:tit|subject|title)[^"\']*["\'][^>]*>(.*?)</', inner_html, re.DOTALL | re.IGNORECASE)
-            raw_t = tit_m.group(1) if tit_m else inner_html
-            title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", raw_t))).strip()
-
-            if len(title_txt) >= 10 and title_txt not in seen_titles and len(results) < 25:
-                seen_urls.add(clean_u)
-                seen_titles.add(title_txt)
-                results.append({
-                    "source": source_label,
-                    "title": title_txt,
-                    "url": clean_u,
-                })
-
-    kw_clean = custom_keyword.strip()
-    if kw_clean:
-        # 네이트 검색은 EUC-KR 퍼센트 인코딩 필수
-        q_euckr = urllib.parse.quote(kw_clean.encode("euc-kr", errors="ignore"))
-        parse_nate_html(f"https://news.nate.com/search?q={q_euckr}", f"네이트검색({kw_clean})")
-        if len(results) < 15:
-            parse_nate_html(f"https://m.news.nate.com/search?q={q_euckr}", f"네이트검색({kw_clean})")
-    elif is_fashion:
-        for kw in ["공항패션", "사복패션", "제작발표회 패션"]:
-            if len(results) >= 18:
-                break
-            q_euc = urllib.parse.quote(kw.encode("euc-kr", errors="ignore"))
-            parse_nate_html(f"https://news.nate.com/search?q={q_euc}", "네이트패션")
-        if len(results) < 20:
-            parse_nate_html("https://news.nate.com/rank/interest?sc=ent", "네이트연예")
-    else:
-        parse_nate_html("https://news.nate.com/rank/interest?sc=ent", "네이트연예")
-        if len(results) < 20:
-            parse_nate_html("https://m.news.nate.com/rank/interest?sc=ent", "네이트연예")
-        if len(results) < 20:
-            parse_nate_html("https://news.nate.com/ent", "네이트연예")
-
-    return results[:25]
-
-def fetch_fashion_blogs_top20(custom_keyword=""):
-    """탭 1 전용: 네이버 연예인 패션 인기 블로그 글 1~20위 수집기"""
-    results = []
-    seen_titles = set()
-    kw_clean = custom_keyword.strip()
-    q_blog = f'site:blog.naver.com "{kw_clean}" ("패션" OR "착장" OR "코디")' if kw_clean else 'site:blog.naver.com "연예인" ("패션" OR "공항패션" OR "사복패션" OR "착장")'
-    rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(q_blog)}&hl=ko&gl=KR&ceid=KR:ko"
-    try:
-        req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            root_xml = ET.fromstring(resp.read())
-        for item in root_xml.findall(".//item")[:22]:
-            t_el, l_el, d_el = item.find("title"), item.find("link"), item.find("description")
-            if t_el is not None and l_el is not None and t_el.text and l_el.text:
-                clean_t = html.unescape(t_el.text).strip()
-                raw_link = l_el.text.strip()
-                if d_el is not None and d_el.text:
-                    desc_unesc = html.unescape(d_el.text)
-                    real_href = re.search(r'href=["\'](https?://(?!(?:news\.google|www\.google))[^"\']+)["\']', desc_unesc)
-                    if real_href:
-                        raw_link = real_href.group(1)
-                if clean_t not in seen_titles and len(results) < 20:
-                    seen_titles.add(clean_t)
-                    results.append({"source": "패션블로그", "title": clean_t, "url": raw_link})
-    except Exception:
-        pass
-    return results[:20]
-
 def generate_with_gemini(contents, sys_prompt):
     last_err = None
     for m_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash"]:
@@ -913,88 +904,41 @@ with left_col:
         is_issue = (cur_mode == "issue")
 
         with st.container(border=True):
-            st.markdown(f"**🔥 {'네이트(NATE) 실시간 연예·이슈 랭킹 1~20위' if is_issue else '네이트(NATE) 패션·연예 1~20위 & 패션 블로그 인기글 1~20위'} 긁어오기**")
+            st.markdown("**🔥 네이트(NATE) 실시간 급상승 관심뉴스 1~30위 긁어오기**")
 
             if not is_issue:
-                nc1, nc2, nc3, nc4 = st.columns([1.8, 2.0, 1.8, 1.1])
+                nc1, nc2 = st.columns(2)
                 with nc1:
-                    if st.button("🏆 네이트 패션·연예 1~20위", type="primary", use_container_width=True, key="btn_nate_fashion"):
-                        with st.spinner("네이트 패션·연예 기사 1~20위를 불러오는 중..."):
-                            fetched = fetch_nate_only_news("", is_fashion=True)
+                    if st.button("🏆 네이트 실시간 관심뉴스 1~30위 불러오기", type="primary", use_container_width=True, key="btn_nate_fashion"):
+                        with st.spinner("네이트 실시간 급상승 관심뉴스 1~30위를 불러오는 중..."):
+                            fetched = fetch_nate_ent_top30()
                             st.session_state[mode_news_key] = fetched
                             if not fetched:
-                                st.error("네이트 목록을 불러오지 못했습니다. 옆 [👗 패션 블로그 인기 1~20위]를 눌러주세요.")
+                                st.error("네이트 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
                 with nc2:
-                    if st.button("👗 패션 블로그 인기 1~20위", type="primary", use_container_width=True, key="btn_blog_fashion"):
-                        with st.spinner("네이버 연예인 패션 인기 블로그 1~20위를 불러오는 중..."):
-                            fetched = fetch_fashion_blogs_top20("")
-                            st.session_state[mode_news_key] = fetched
-                with nc3:
-                    custom_kw = st.text_input(
-                        "키워드 검색",
-                        value="공항패션",
-                        placeholder="연예인/패션 키워드 입력",
-                        label_visibility="collapsed",
-                        key="kw_nate_fashion"
-                    )
-                with nc4:
-                    if st.button("🔍 키워드 검색", use_container_width=True, key="btn_nate_search_fashion"):
-                        with st.spinner(f"'{custom_kw}' 검색 중..."):
-                            fetched = fetch_nate_only_news(custom_kw, is_fashion=True)
-                            if not fetched:
-                                fetched = fetch_fashion_blogs_top20(custom_kw)
+                    if st.button("👗 패션 블로그 인기 1~20위 불러오기", type="primary", use_container_width=True, key="btn_blog_fashion"):
+                        with st.spinner("연예인 패션 인기 블로그 1~20위를 불러오는 중..."):
+                            fetched = fetch_fashion_blogs_top20()
                             st.session_state[mode_news_key] = fetched
             else:
-                nc1, nc2, nc3 = st.columns([2.2, 2.2, 1.4])
-                with nc1:
-                    if st.button("🏆 네이트 연예 랭킹 1~20위", type="primary", use_container_width=True, key="btn_nate_issue"):
-                        with st.spinner("네이트 연예 실시간 랭킹 1~20위를 불러오는 중..."):
-                            fetched = fetch_nate_only_news("", is_fashion=False)
-                            st.session_state[mode_news_key] = fetched
-                            if not fetched:
-                                st.error("네이트 서버에서 목록을 받아오지 못했습니다. 아래 맞춤 키워드를 눌러보세요.")
-                with nc2:
-                    custom_kw = st.text_input(
-                        "네이트 키워드 검색",
-                        value="예능 하이라이트",
-                        placeholder="연예인 이름/이슈 키워드 입력",
-                        label_visibility="collapsed",
-                        key="kw_nate_issue"
-                    )
-                with nc3:
-                    if st.button("🔍 입력 키워드만 검색", use_container_width=True, key="btn_nate_search_issue"):
-                        with st.spinner(f"네이트에서 '{custom_kw}' 기사를 검색 중..."):
-                            fetched = fetch_nate_only_news(custom_kw, is_fashion=False)
-                            st.session_state[mode_news_key] = fetched
-                            if not fetched:
-                                st.warning(f"'{custom_kw}'에 대한 네이트 검색 결과가 없습니다.")
-
-            # PC 프로그램과 동일한 원클릭 맞춤 추천 키워드 버튼 줄
-            rec_kws = (
-                ["예능 하이라이트", "드라마 비하인드", "SNS 근황", "열애 결혼", "컴백 인터뷰", "화제 발언"]
-                if is_issue
-                else ["공항패션", "출근길 패션", "제작발표회", "사복패션", "예능 착장", "화보 패션"]
-            )
-            rk_cols = st.columns(len(rec_kws))
-            for rk_i, rk_word in enumerate(rec_kws):
-                if rk_cols[rk_i].button(rk_word, key=f"rk_{cur_mode}_{rk_i}", use_container_width=True):
-                    with st.spinner(f"'{rk_word}' 관련 기사 수집 중..."):
-                        fetched = fetch_nate_only_news(rk_word, is_fashion=(not is_issue))
-                        if not fetched and not is_issue:
-                            fetched = fetch_fashion_blogs_top20(rk_word)
+                if st.button("🏆 네이트 실시간 급상승 관심뉴스 1~30위 불러오기", type="primary", use_container_width=True, key="btn_nate_issue"):
+                    with st.spinner("네이트 실시간 급상승 관심뉴스 1~30위를 불러오는 중..."):
+                        fetched = fetch_nate_ent_top30()
                         st.session_state[mode_news_key] = fetched
+                        if not fetched:
+                            st.error("네이트 서버에서 목록을 받아오지 못했습니다. 잠시 후 다시 시도해 주세요.")
 
             if st.session_state[mode_news_key]:
-                st.caption(f"총 {len(st.session_state[mode_news_key])}개의 직통 기사가 수집되었습니다. 체크 후 아래 버튼을 눌러주세요.")
+                st.caption(f"총 {len(st.session_state[mode_news_key])}개의 실시간 기사가 수집되었습니다. 변환할 기사를 여러 개 체크한 뒤 아래 버튼을 눌러주세요.")
                 selected_items = []
-                with st.container(height=230):
+                with st.container(height=280):
                     for idx_n, item in enumerate(st.session_state[mode_news_key], start=1):
-                        if st.checkbox(f"{idx_n:02d}. [{item['source']}] {item['title']}", key=f"chk_{cur_mode}_{idx_n}"):
+                        if st.checkbox(f"{idx_n:02d}위. [{item['source']}] {item['title']}", key=f"chk_{cur_mode}_{idx_n}"):
                             selected_items.append(item)
 
                 if st.button("✅ 선택한 기사 URL 아래 입력창에 넣기", type="primary", use_container_width=True, key=f"btn_put_{cur_mode}"):
                     if not selected_items:
-                        st.warning("위 목록에서 기사를 하나 이상 체크해 주세요!")
+                        st.warning("위 1~30위 목록에서 기사를 하나 이상 체크해 주세요!")
                     else:
                         existing_u = st.session_state.get(f"textarea_url_{cur_mode}", "").strip()
                         picked_urls = [it["url"] for it in selected_items]
@@ -1006,7 +950,7 @@ with left_col:
 
         u_hdr1, u_hdr2 = st.columns([4, 1])
         with u_hdr1:
-            st.markdown(f"**1. {'연예인 이슈·근황' if is_issue else '패션·착장 분석'} 네이트 기사 / 네이버 블로그 URL 붙여넣기 (줄바꿈 동시 입력)**")
+            st.markdown(f"**1. {'연예인 이슈·근황' if is_issue else '패션·착장 분석'} 네이트 기사 / 네이버 블로그 URL 붙여넣기 (줄바꿈으로 동시 입력)**")
         with u_hdr2:
             if st.button("🧹 URL 비우기", use_container_width=True, key=f"btn_clear_{cur_mode}"):
                 st.session_state[mode_urls_key] = ""
@@ -1043,7 +987,7 @@ with left_col:
                 generated_any = False
 
                 for idx, target_u in enumerate(urls, start=1):
-                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 상위 5% 원고 작성 중..."):
+                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 상위 5% 원고 일괄 작성 중..."):
                         try:
                             p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u)
                             if len(o_body.strip()) < 50:
