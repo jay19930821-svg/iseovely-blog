@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import urllib.request
 import urllib.parse
+import http.cookiejar
 import xml.etree.ElementTree as ET
 import re
 import html
@@ -503,15 +504,19 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
     components.html(comp_html, height=48)
 
 # ==========================================
-# 구글 뉴스 암호화 링크 해독 & 원문 추적 엔진
+# 구글 뉴스 암호화 링크 해독 & 원문/고화질 사진 추출 엔진
 # ==========================================
 def decode_google_news_url(source_url):
     if "news.google.com" not in source_url:
         return source_url
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    }
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    opener.addheaders = [
+        ("User-Agent", ua),
+        ("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8"),
+    ]
 
     try:
         path_part = urllib.parse.urlparse(source_url).path.split("/")[-1]
@@ -527,17 +532,21 @@ def decode_google_news_url(source_url):
 
     try:
         article_id = urllib.parse.urlparse(source_url).path.split("/")[-1]
-        fetch_u = f"https://news.google.com/articles/{article_id}"
-        req = urllib.request.Request(fetch_u, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        fetch_u = f"https://news.google.com/rss/articles/{article_id}?oc=5"
+        with opener.open(fetch_u, timeout=10) as resp:
+            final_u = resp.geturl()
+            if "news.google.com" not in final_u:
+                return final_u
             html_str = resp.read().decode("utf-8", errors="ignore")
 
         ts_m = re.search(r'data-n-a-ts=["\'](\d+)["\']', html_str)
         sg_m = re.search(r'data-n-a-sg=["\']([^"\']+)["\']', html_str)
         if ts_m and sg_m:
-            ts_val = ts_m.group(1)
-            sg_val = sg_m.group(1)
-            payload_inner = f'["garturlreq",[["X","X",["X","X"],null,null,1,1,"KR:ko",null,1,null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{article_id}",{ts_val},"{sg_val}"]'
+            ts_val, sg_val = ts_m.group(1), sg_m.group(1)
+            payload_inner = (
+                f'["garturlreq",[["X","X",["X","X"],null,null,1,1,"KR:ko",null,1,null,null,null,null,null,0,1],'
+                f'"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{article_id}",{ts_val},"{sg_val}"]'
+            )
             req_body = urllib.parse.urlencode({
                 "f.req": json.dumps([[["Fbv4je", payload_inner, None, "generic"]]])
             }).encode("utf-8")
@@ -545,12 +554,9 @@ def decode_google_news_url(source_url):
             api_req = urllib.request.Request(
                 "https://news.google.com/_/DotsSplashUi/data/batchexecute",
                 data=req_body,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-                    "User-Agent": headers["User-Agent"],
-                },
+                headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
             )
-            with urllib.request.urlopen(api_req, timeout=10) as api_resp:
+            with opener.open(api_req, timeout=10) as api_resp:
                 api_txt = api_resp.read().decode("utf-8", errors="ignore")
             real_m = re.search(r'\["garturlres","(https?://[^"]+)"', api_txt)
             if real_m:
@@ -589,15 +595,64 @@ def normalize_blog_url(raw_url):
         u = u.replace("https://blog.naver.com/", "https://m.blog.naver.com/").replace("http://blog.naver.com/", "https://m.blog.naver.com/")
     return u
 
+def fetch_fallback_images_by_title(query_title, max_imgs=6):
+    clean_q = re.sub(r"\[[^\]]*\]|\([^\)]*\)|-\s*[^-]+$", " ", query_title)
+    clean_q = re.sub(r"\s+", " ", clean_q).strip()
+    if not clean_q:
+        return [], []
+
+    saved_bytes, ai_thumbs, tried = [], [], set()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+    try:
+        search_u = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_q)}&form=HDRSC2&first=1"
+        req = urllib.request.Request(search_u, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_s = resp.read().decode("utf-8", errors="ignore")
+
+        murls = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', html_s)
+        if not murls:
+            murls = re.findall(r'"murl":"(https?://[^"]+?)"', html_s)
+
+        for img_u in murls:
+            if len(saved_bytes) >= max_imgs:
+                break
+            if img_u in tried or any(b in img_u.lower() for b in ["logo", "icon", "banner", "1x1", "avatar"]):
+                continue
+            tried.add(img_u)
+            try:
+                i_req = urllib.request.Request(img_u, headers={"User-Agent": headers["User-Agent"]})
+                with urllib.request.urlopen(i_req, timeout=6) as i_resp:
+                    raw_d = i_resp.read()
+                if len(raw_d) < 8000:
+                    continue
+                with Image.open(io.BytesIO(raw_d)) as im:
+                    if im.size[0] < 250 or im.size[1] < 200:
+                        continue
+                    edited_im = process_unique_image(im, apply_crop=True)
+                    buf = io.BytesIO()
+                    edited_im.save(buf, format="JPEG", quality=96, subsampling=0)
+                    saved_bytes.append(buf.getvalue())
+
+                    th = edited_im.copy()
+                    th.thumbnail((512, 512))
+                    ai_thumbs.append(th)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return saved_bytes, ai_thumbs
+
 def scrape_single_url_raw(raw_url):
-    """단일 URL에서 제목·본문·고화질 사진 추출 (해외 서버 차단 시 빈 결과 반환 후 폴백 처리)"""
     decoded_url = decode_google_news_url(raw_url.strip())
     url = normalize_blog_url(decoded_url)
     if "news.google.com" in url:
         return "", "", [], []
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
@@ -620,6 +675,9 @@ def scrape_single_url_raw(raw_url):
         t_m = re.search(r"<title>(.*?)</title>", page_html, re.IGNORECASE | re.DOTALL)
         page_title = html.unescape(t_m.group(1)).strip() if t_m else ""
 
+    og_img_m = re.search(r'(?:property|name)=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
+    og_img_url = html.unescape(og_img_m.group(1)).strip() if og_img_m else ""
+
     body_html = ""
     se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
     if se_start:
@@ -630,11 +688,11 @@ def scrape_single_url_raw(raw_url):
         for pattern in [
             r'id=["\']comp_news_article["\'][^>]*>(.*?)</article>',
             r'id=["\']dic_area["\'][^>]*>(.*?)</article>',
-            r'id=["\']realArtcContents["\'][^>]*>(.*?)</div>\s*<!--',
+            r'id=["\']articleBody["\'][^>]*>(.*?)</(?:div|article|section)>',
             r'id=["\']artcContents["\'][^>]*>(.*?)</div>',
             r'itemprop=["\']articleBody["\'][^>]*>(.*?)</(?:div|article|section)>',
-            r'class=["\'][^"\']*article[_-]body[^"\']*["\'][^>]*>(.*?)</(?:div|article)>',
-            r'id=["\']postViewArea["\'][^>]*>(.*?)</div>',
+            r'class=["\'][^"\']*(?:article[_-]body|news[_-]view|view[_-]con|article[_-]txt|read[_-]body)[^"\']*["\'][^>]*>(.*?)</(?:div|article|section)>',
+            r'<article[^>]*>(.*?)</article>',
         ]:
             m = re.search(pattern, page_html, re.DOTALL | re.IGNORECASE)
             if m and len(m.group(1)) > 150:
@@ -646,7 +704,7 @@ def scrape_single_url_raw(raw_url):
     clean_html = re.sub(r"<script.*?>.*?</script>", "", body_html, flags=re.DOTALL)
     clean_html = re.sub(r"<style.*?>.*?</style>", "", clean_html, flags=re.DOTALL)
 
-    bad_words = ["logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar", "profile", "blank", "emoticon", "sticker", "map", "static.naver", "blogpfthumb", "ogq", "gfmarket", "storep", "transparent", "journalist", "reporter"]
+    bad_words = ["logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar", "profile", "blank", "emoticon", "sticker", "map", "static.naver", "blogpfthumb", "ogq", "gfmarket", "storep", "transparent", "journalist", "reporter", "sns_"]
     saved_images_bytes = []
     ai_thumbs = []
     url_to_photo_tag = {}
@@ -656,7 +714,7 @@ def scrape_single_url_raw(raw_url):
         base_u = target_img_url.split("?")[0]
         candidates = [base_u + "?type=w966", base_u, target_img_url] if ("postfiles.pstatic.net" in base_u or "blogfiles.pstatic.net" in base_u) else [target_img_url, base_u]
         dl_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": headers["User-Agent"],
             "Referer": final_url,
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         }
@@ -675,6 +733,8 @@ def scrape_single_url_raw(raw_url):
         u_clean = html.unescape(raw_img_url).strip()
         if u_clean.startswith("//"):
             u_clean = "https:" + u_clean
+        elif u_clean.startswith("/"):
+            u_clean = urllib.parse.urljoin(final_url, u_clean)
         if not u_clean.startswith("http") or any(b in u_clean.lower() for b in bad_words):
             return None
 
@@ -690,7 +750,7 @@ def scrape_single_url_raw(raw_url):
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
-                if im.size[0] < 180 or im.size[1] < 180:
+                if im.size[0] < 200 or im.size[1] < 160:
                     return None
                 edited_im = process_unique_image(im, apply_crop=True)
                 buf = io.BytesIO()
@@ -721,7 +781,7 @@ def scrape_single_url_raw(raw_url):
             except Exception:
                 pass
         if not candidate_src:
-            src_m = re.search(r'(?:data-lazy-src|data-src|src)=["\']((?:https?:)?//[^"\']+)["\']', tag_str, re.IGNORECASE)
+            src_m = re.search(r'(?:data-lazy-src|data-original|data-src|src)=["\']((?:https?:)?//[^"\']+|/[^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*)["\']', tag_str, re.IGNORECASE)
             if src_m:
                 candidate_src = src_m.group(1)
         if not candidate_src:
@@ -730,6 +790,7 @@ def scrape_single_url_raw(raw_url):
         return f"\n{marker}\n" if marker else "\n"
 
     html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
+
     if len(saved_images_bytes) < 10:
         raw_cdn_imgs = re.findall(
             r'https?://(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|https?://[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
@@ -746,20 +807,25 @@ def scrape_single_url_raw(raw_url):
         if extra_markers:
             html_with_markers += "\n" + "\n".join(extra_markers)
 
+    if len(saved_images_bytes) == 0 and og_img_url:
+        mk = download_and_save_single_img(og_img_url)
+        if mk:
+            html_with_markers = f"{mk}\n" + html_with_markers
+
     text_only = re.sub(r"<[^>]+>", "\n", html_with_markers)
     lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
     return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
 
 def extract_blog_text_and_photos(raw_url, cached_meta=None):
-    """
-    1순위: URL 원문 직접 추출
-    2순위: 암호화 링크/해외 IP 차단 시 동일 기사 제목으로 관련 보도/블로그 원문을 자동 추적하여 결합 추출
-    """
     p_title, o_body, img_bytes, ai_thumbs = scrape_single_url_raw(raw_url)
     if len(o_body.strip()) >= 150:
+        if len(img_bytes) == 0 and p_title:
+            img_bytes, ai_thumbs = fetch_fallback_images_by_title(p_title, max_imgs=5)
+            if img_bytes:
+                markers = "\n".join([f"[사진 {i+1}]" for i in range(len(img_bytes))])
+                o_body = markers + "\n" + o_body
         return p_title, o_body, img_bytes, ai_thumbs
 
-    # 폴백: 수집기에서 미리 확보해 둔 기사 제목 & 요약 활용
     fallback_title = (cached_meta or {}).get("title", "") or p_title
     fallback_summary = (cached_meta or {}).get("summary", "")
 
@@ -779,17 +845,24 @@ def extract_blog_text_and_photos(raw_url, cached_meta=None):
                     snip = re.sub(r"<[^>]+>", " ", html.unescape(d_el.text)).strip()
                     if snip and snip not in collected_snippets:
                         collected_snippets.append(snip)
-                if l_el is not None and l_el.text and len(o_body.strip()) < 150:
+                if l_el is not None and l_el.text:
                     t2, b2, imgs2, th2 = scrape_single_url_raw(l_el.text.strip())
                     if len(b2.strip()) >= 150:
+                        if len(imgs2) == 0:
+                            imgs2, th2 = fetch_fallback_images_by_title(fallback_title, max_imgs=5)
                         return fallback_title, b2, imgs2, th2
 
-            combined_text = f"기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets)
+            if len(img_bytes) == 0:
+                img_bytes, ai_thumbs = fetch_fallback_images_by_title(fallback_title, max_imgs=5)
+
+            markers_prefix = "\n".join([f"[사진 {i+1}]" for i in range(len(img_bytes))]) + "\n" if img_bytes else ""
+            combined_text = f"{markers_prefix}기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets)
             if len(combined_text.strip()) >= 40:
                 return fallback_title, combined_text, img_bytes, ai_thumbs
         except Exception:
-            if fallback_title:
-                return fallback_title, f"기사 제목: {fallback_title}\n{fallback_summary}", img_bytes, ai_thumbs
+            if len(img_bytes) == 0:
+                img_bytes, ai_thumbs = fetch_fallback_images_by_title(fallback_title, max_imgs=5)
+            return fallback_title, f"기사 제목: {fallback_title}\n{fallback_summary}", img_bytes, ai_thumbs
 
     return p_title, o_body, img_bytes, ai_thumbs
 
@@ -797,7 +870,7 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
     results = []
     seen_titles = set()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 
     if mode_type == "fashion_blog":
@@ -831,7 +904,6 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
                     if d_el is not None and d_el.text:
                         desc_unesc = html.unescape(d_el.text)
                         summary_txt = re.sub(r"<[^>]+>", " ", desc_unesc).strip()
-                        # description 내 실제 언론사/블로그 직링크가 있으면 우선 추출
                         real_href = re.search(r'href=["\'](https?://(?!(?:news\.google|www\.google))[^"\']+)["\']', desc_unesc)
                         if real_href:
                             raw_link = real_href.group(1)
@@ -885,20 +957,24 @@ def generate_with_gemini(contents, sys_prompt):
     raise RuntimeError(f"AI 원고 생성 실패 (API 키 또는 할당량 확인 필요): {last_err}")
 
 # ==========================================
-# 세션 상태 초기화
+# 세션 상태 초기화 (탭별 100% 독립 저장소)
 # ==========================================
 if "active_mode" not in st.session_state:
     st.session_state["active_mode"] = "fashion"
-if "archive_list" not in st.session_state:
-    st.session_state["archive_list"] = []
-if "selected_archive_idx" not in st.session_state:
-    st.session_state["selected_archive_idx"] = 0
 if "strategy_memo" not in st.session_state:
     st.session_state["strategy_memo"] = DEFAULT_STRATEGY_MEMO
-if "crawled_news" not in st.session_state:
-    st.session_state["crawled_news"] = []
 if "url_meta_map" not in st.session_state:
     st.session_state["url_meta_map"] = {}
+
+for m_key in ("fashion", "issue", "food"):
+    if f"archive_{m_key}" not in st.session_state:
+        st.session_state[f"archive_{m_key}"] = []
+    if f"sel_idx_{m_key}" not in st.session_state:
+        st.session_state[f"sel_idx_{m_key}"] = 0
+    if f"news_{m_key}" not in st.session_state:
+        st.session_state[f"news_{m_key}"] = []
+    if f"urls_{m_key}" not in st.session_state:
+        st.session_state[f"urls_{m_key}"] = ""
 
 # ==========================================
 # 메인 2단 레이아웃
@@ -933,6 +1009,10 @@ with left_col:
             st.rerun()
 
     cur_mode = st.session_state["active_mode"]
+    mode_archive_key = f"archive_{cur_mode}"
+    mode_sel_key = f"sel_idx_{cur_mode}"
+    mode_news_key = f"news_{cur_mode}"
+    mode_urls_key = f"urls_{cur_mode}"
 
     if cur_mode == "fashion":
         st.markdown('<div class="mode-banner-fashion">👗 현재 모드: [패션·착장 분석 전용] — 아이템·브랜드·컬러 배색·실생활 코디 팁 중심으로 작성합니다.</div>', unsafe_allow_html=True)
@@ -943,64 +1023,67 @@ with left_col:
 
     style_choice = st.selectbox(
         "0. 적용할 블로그 문체 스타일 선택 (심플 3색 파스텔 형광펜 · 포인트 글자색 · 인용구 자동 적용)",
-        list(DEFAULT_STYLES.keys())
+        list(DEFAULT_STYLES.keys()),
+        key=f"style_sel_{cur_mode}"
     )
 
     if cur_mode in ("fashion", "issue"):
         is_issue = (cur_mode == "issue")
 
         with st.container(border=True):
-            st.markdown("**🔥 실시간 연예·패션 통합 랭킹 & 패션 블로그 인기글 1~20위 긁어오기**")
+            st.markdown(f"**🔥 {'실시간 연예·이슈 통합 랭킹 1~20위' if is_issue else '실시간 패션 뉴스 & 연예인 패션 블로그 1~20위'} 긁어오기**")
             if not is_issue:
                 nc1, nc2, nc3, nc4 = st.columns([1.8, 2.0, 1.8, 1.1])
                 with nc1:
-                    if st.button("🏆 뉴스 통합 1~20위", type="primary", use_container_width=True):
+                    if st.button("🏆 뉴스 통합 1~20위", type="primary", use_container_width=True, key="btn_f_news"):
                         with st.spinner("실시간 연예·패션 뉴스 1~20위를 불러오는 중..."):
-                            st.session_state["crawled_news"] = fetch_top20_ent_news("", mode_type="news")
+                            st.session_state[mode_news_key] = fetch_top20_ent_news("", mode_type="news")
                 with nc2:
-                    if st.button("👗 패션 블로그 인기 1~20위", type="primary", use_container_width=True):
+                    if st.button("👗 패션 블로그 인기 1~20위", type="primary", use_container_width=True, key="btn_f_blog"):
                         with st.spinner("네이버 연예인 패션 인기 블로그 1~20위를 불러오는 중..."):
-                            st.session_state["crawled_news"] = fetch_top20_ent_news("", mode_type="fashion_blog")
+                            st.session_state[mode_news_key] = fetch_top20_ent_news("", mode_type="fashion_blog")
                 with nc3:
                     custom_kw = st.text_input(
                         "키워드 검색",
                         placeholder="연예인/아이템 검색",
-                        label_visibility="collapsed"
+                        label_visibility="collapsed",
+                        key="kw_input_fashion"
                     )
                 with nc4:
-                    if st.button("🔍 검색", use_container_width=True):
+                    if st.button("🔍 검색", use_container_width=True, key="btn_f_search"):
                         with st.spinner(f"'{custom_kw}' 검색 중..."):
-                            st.session_state["crawled_news"] = fetch_top20_ent_news(custom_kw, mode_type="news")
+                            st.session_state[mode_news_key] = fetch_top20_ent_news(custom_kw, mode_type="news")
             else:
                 nc1, nc2, nc3 = st.columns([2.2, 2.2, 1.4])
                 with nc1:
-                    if st.button("🏆 실시간 통합 1~20위 불러오기", type="primary", use_container_width=True):
+                    if st.button("🏆 실시간 통합 1~20위 불러오기", type="primary", use_container_width=True, key="btn_i_news"):
                         with st.spinner("실시간 연예·이슈 통합 1~20위 기사를 불러오는 중..."):
-                            st.session_state["crawled_news"] = fetch_top20_ent_news("", mode_type="news")
+                            st.session_state[mode_news_key] = fetch_top20_ent_news("", mode_type="news")
                 with nc2:
                     custom_kw = st.text_input(
                         "특정 연예인/키워드 검색",
                         placeholder="특정 키워드 검색 시 입력 (비워두면 전체 1~20위)",
-                        label_visibility="collapsed"
+                        label_visibility="collapsed",
+                        key="kw_input_issue"
                     )
                 with nc3:
-                    if st.button("🔍 키워드 검색", use_container_width=True):
+                    if st.button("🔍 키워드 검색", use_container_width=True, key="btn_i_search"):
                         with st.spinner(f"'{custom_kw}' 관련 기사 검색 중..."):
-                            st.session_state["crawled_news"] = fetch_top20_ent_news(custom_kw, mode_type="news")
+                            st.session_state[mode_news_key] = fetch_top20_ent_news(custom_kw, mode_type="news")
 
-            if st.session_state["crawled_news"]:
-                st.caption(f"총 {len(st.session_state['crawled_news'])}개의 인기 글/기사가 수집되었습니다. 체크 후 아래 버튼을 눌러주세요.")
+            if st.session_state[mode_news_key]:
+                st.caption(f"총 {len(st.session_state[mode_news_key])}개의 인기 글/기사가 수집되었습니다. 체크 후 아래 버튼을 눌러주세요.")
                 selected_items = []
                 with st.container(height=230):
-                    for idx_n, item in enumerate(st.session_state["crawled_news"], start=1):
-                        if st.checkbox(f"{idx_n:02d}위. [{item['source']}] {item['title']}", key=f"news_chk_{idx_n}"):
+                    for idx_n, item in enumerate(st.session_state[mode_news_key], start=1):
+                        if st.checkbox(f"{idx_n:02d}위. [{item['source']}] {item['title']}", key=f"chk_{cur_mode}_{idx_n}"):
                             selected_items.append(item)
 
-                if st.button("✅ 선택한 기사/블로그 URL 아래 입력창에 넣기", type="primary", use_container_width=True):
+                if st.button("✅ 선택한 기사/블로그 URL 아래 입력창에 넣기", type="primary", use_container_width=True, key=f"btn_put_{cur_mode}"):
                     if not selected_items:
                         st.warning("위 목록에서 항목을 하나 이상 체크해 주세요!")
                     else:
-                        existing_u = st.session_state.get("url_input_val", "").strip()
+                        existing_u = st.session_state.get(mode_urls_key, "").strip()
                         picked_urls = []
                         for it in selected_items:
                             u_str = it["url"]
@@ -1010,33 +1093,35 @@ with left_col:
                                 "summary": it.get("summary", ""),
                             }
                         new_u = "\n".join(picked_urls)
-                        st.session_state["url_input_val"] = (existing_u + "\n" + new_u).strip() if existing_u else new_u
+                        st.session_state[mode_urls_key] = (existing_u + "\n" + new_u).strip() if existing_u else new_u
                         st.rerun()
 
         u_hdr1, u_hdr2 = st.columns([4, 1])
         with u_hdr1:
             st.markdown(f"**1. {'연예인 이슈·근황' if is_issue else '패션·착장 분석'} 블로그 / 기사 URL 붙여넣기 (줄바꿈으로 동시 입력)**")
         with u_hdr2:
-            if st.button("🧹 URL 비우기", use_container_width=True):
-                st.session_state["url_input_val"] = ""
+            if st.button("🧹 URL 비우기", use_container_width=True, key=f"btn_clear_{cur_mode}"):
+                st.session_state[mode_urls_key] = ""
                 st.rerun()
 
         url_box = st.text_area(
             "URL 입력",
-            value=st.session_state.get("url_input_val", ""),
+            value=st.session_state.get(mode_urls_key, ""),
             height=95,
             label_visibility="collapsed",
-            placeholder="https://blog.naver.com/... 또는 위 실시간 1~20위에서 선택한 주소가 자동으로 들어갑니다"
+            placeholder="https://blog.naver.com/... 또는 위 실시간 1~20위에서 선택한 주소가 자동으로 들어갑니다",
+            key=f"textarea_url_{cur_mode}"
         )
-        st.session_state["url_input_val"] = url_box
+        st.session_state[mode_urls_key] = url_box
 
         extra_note = st.text_input(
             "강조 포인트 (선택사항)",
-            placeholder="예: 방송 속 결정적 멘트 강조, 팬들 반응 위주로 써줘" if is_issue else "예: 하객룩 코디 추천 강조, 키작녀 비율 보완 팁 위주로 써줘"
+            placeholder="예: 방송 속 결정적 멘트 강조, 팬들 반응 위주로 써줘" if is_issue else "예: 하객룩 코디 추천 강조, 키작녀 비율 보완 팁 위주로 써줘",
+            key=f"extra_note_{cur_mode}"
         )
 
         btn_label = "🔥 [이슈 모드] 선택한 문체로 입력한 URL 일괄 변환 & 보관함 저장" if is_issue else "👗 [패션 모드] 선택한 문체로 입력한 URL 일괄 변환 & 보관함 저장"
-        if st.button(btn_label, type="primary", use_container_width=True):
+        if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_gen_{cur_mode}"):
             urls = [u.strip() for u in url_box.splitlines() if u.strip().startswith("http")]
             if not urls:
                 st.warning("URL 입력창에 유효한 웹 주소(https://...)를 하나 이상 입력해 주세요!")
@@ -1047,7 +1132,7 @@ with left_col:
                 generated_any = False
 
                 for idx, target_u in enumerate(urls, start=1):
-                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 원문 추출 및 상위 5% 황금 글자 수 원고 작성 중..."):
+                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 원문·고화질 사진 추출 및 상위 5% 황금 글자 수 원고 작성 중..."):
                         try:
                             meta_info = st.session_state["url_meta_map"].get(target_u)
                             p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u, cached_meta=meta_info)
@@ -1096,10 +1181,11 @@ with left_col:
 
                             plain_clean = strip_all_markers(body_clean)
                             c_len = len(re.sub(r"\s+", "", plain_clean))
-                            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            label_str = f"{ts_str}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
+                            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
-                            st.session_state["archive_list"].insert(0, {
+                            st.session_state[mode_archive_key].insert(0, {
+                                "id": ts_str,
                                 "label": label_str,
                                 "title": p_title,
                                 "body": body_clean,
@@ -1109,13 +1195,13 @@ with left_col:
                                 "images": img_bytes_list,
                                 "char_count": c_len,
                             })
-                            st.session_state["selected_archive_idx"] = 0
+                            st.session_state[mode_sel_key] = 0
                             generated_any = True
                         except Exception as e:
                             st.error(f"{idx}번 URL 처리 오류: {e}")
 
                 if generated_any:
-                    st.success("✅ 원고 변환 및 보관함 저장이 완료되었습니다! 아래 2번·3번 영역에서 바로 복사하세요.")
+                    st.rerun()
 
     else:
         st.markdown("**1. 직접 찍은 맛집 사진 불러오기 (최대 15장 · 갤럭시/아이폰/PC 사진 선택)**")
@@ -1123,22 +1209,24 @@ with left_col:
             "맛집 사진 선택",
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=True,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="uploader_food"
         )
 
         f_col1, f_col2 = st.columns(2)
         with f_col1:
-            store_name_input = st.text_input("식당 상호명 & 지역 (필수)", placeholder="예: 부평 투파인드피터 / 신중동 럭키족발")
+            store_name_input = st.text_input("식당 상호명 & 지역 (필수)", placeholder="예: 부평 투파인드피터 / 신중동 럭키족발", key="food_store")
         with f_col2:
-            menu_info_input = st.text_input("주문한 메뉴 & 가격/특징", placeholder="예: 참나무 장작 바베큐 족발, 오복쟁반막국수")
+            menu_info_input = st.text_input("주문한 메뉴 & 가격/특징", placeholder="예: 참나무 장작 바베큐 족발, 오복쟁반막국수", key="food_menu")
 
         food_guideline_input = st.text_area(
             "협찬/체험단 가이드라인 또는 강조할 맛 포인트 (선택사항)",
             height=80,
-            placeholder="예: 네이버 영수증 리뷰 시 살얼음 막걸리 무료 증정 이벤트 강조, 데이트 코스로 추천하는 분위기 강조"
+            placeholder="예: 네이버 영수증 리뷰 시 살얼음 막걸리 무료 증정 이벤트 강조, 데이트 코스로 추천하는 분위기 강조",
+            key="food_guide"
         )
 
-        if st.button("🍽️ [맛집 모드] 업로드한 사진으로 맛집 리뷰 원고 & 사진 보정 일괄 생성", type="primary", use_container_width=True):
+        if st.button("🍽️ [맛집 모드] 업로드한 사진으로 맛집 리뷰 원고 & 사진 보정 일괄 생성", type="primary", use_container_width=True, key="btn_gen_food"):
             if not uploaded_food_files:
                 st.warning("맛집 사진을 1장 이상 업로드해 주세요!")
             elif not store_name_input.strip():
@@ -1190,11 +1278,12 @@ with left_col:
 
                         plain_clean = strip_all_markers(body_clean)
                         c_len = len(re.sub(r"\s+", "", plain_clean))
-                        ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                         title_clean = store_name_input.strip()
-                        label_str = f"{ts_str}_[맛집]_{title_clean[:24]} [보정사진 {img_cnt}장 · 공백제외 {c_len}자]"
+                        label_str = f"{ts_str[:15]}_[맛집]_{title_clean[:24]} [보정사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
-                        st.session_state["archive_list"].insert(0, {
+                        st.session_state[mode_archive_key].insert(0, {
+                            "id": ts_str,
                             "label": label_str,
                             "title": title_clean,
                             "body": body_clean,
@@ -1204,39 +1293,42 @@ with left_col:
                             "images": food_img_bytes,
                             "char_count": c_len,
                         })
-                        st.session_state["selected_archive_idx"] = 0
-                        st.success("✅ 맛집 후기 원고 및 보정 사진이 생성되었습니다!")
+                        st.session_state[mode_sel_key] = 0
+                        st.rerun()
                     except Exception as e:
                         st.error(f"맛집 원고 생성 중 오류 발생: {e}")
 
     # ==========================================================
-    # 2. 생성 완료 보관함 & 3. 완성된 원고 본문 & 4. 추천 태그 30개
+    # 2. 현재 탭 전용 생성 완료 보관함 & 3. 완성 원고 & 4. 태그 30개
     # ==========================================================
     st.divider()
+    mode_kor = {"fashion": "👗 패션·착장", "issue": "🔥 연예인 이슈", "food": "🍽️ 맛집 후기"}[cur_mode]
     arc_h1, arc_h2, arc_h3 = st.columns([3, 1, 1.2])
     with arc_h1:
-        st.markdown("**2. 생성 완료 보관함 ([패션] / [이슈] / [맛집] 자동 구분)**")
+        st.markdown(f"**2. [{mode_kor}] 생성 완료 보관함 (탭별 독립 저장)**")
     with arc_h2:
-        if st.button("🗑️ 선택 항목 삭제", use_container_width=True):
-            if st.session_state["archive_list"]:
-                idx_del = st.session_state["selected_archive_idx"]
-                st.session_state["archive_list"].pop(idx_del)
-                st.session_state["selected_archive_idx"] = 0
+        if st.button("🗑️ 선택 항목 삭제", use_container_width=True, key=f"btn_del_{cur_mode}"):
+            if st.session_state[mode_archive_key]:
+                idx_del = st.session_state[mode_sel_key]
+                st.session_state[mode_archive_key].pop(idx_del)
+                st.session_state[mode_sel_key] = 0
                 st.rerun()
     with arc_h3:
         st.link_button("✍️ 네이버 블로그 글쓰기", "https://blog.naver.com/GoBlogWrite.naver", use_container_width=True)
 
-    if st.session_state["archive_list"]:
-        labels = [it["label"] for it in st.session_state["archive_list"]]
+    if st.session_state[mode_archive_key]:
+        labels = [it["label"] for it in st.session_state[mode_archive_key]]
         sel_idx = st.selectbox(
             "보관함 목록 선택",
             range(len(labels)),
-            index=min(st.session_state["selected_archive_idx"], len(labels) - 1),
+            index=min(st.session_state[mode_sel_key], len(labels) - 1),
             format_func=lambda i: labels[i],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key=f"sel_arc_{cur_mode}_{len(labels)}"
         )
-        st.session_state["selected_archive_idx"] = sel_idx
-        cur_item = st.session_state["archive_list"][sel_idx]
+        st.session_state[mode_sel_key] = sel_idx
+        cur_item = st.session_state[mode_archive_key][sel_idx]
+        item_uid = cur_item["id"]
 
         st.markdown(f"**3. 완성된 원고 본문 (공백 제외 {cur_item['char_count']}자 · 3색 파스텔 음영 & 컬러/인용구 적용)**")
 
@@ -1246,7 +1338,7 @@ with left_col:
                 cur_item["html"],
                 cur_item["plain"],
                 btn_label="📋 원고 서식 그대로 복사 (네이버 에디터 Ctrl+V)",
-                key_id=f"copy_rich_{sel_idx}"
+                key_id=f"copy_rich_{item_uid}"
             )
         with act_c2:
             if cur_item["images"]:
@@ -1257,9 +1349,10 @@ with left_col:
                 st.download_button(
                     label=f"📦 가공된 사진 {len(cur_item['images'])}장 ZIP 다운로드",
                     data=zip_buf.getvalue(),
-                    file_name=f"이서블리_사진_{sel_idx+1}.zip",
+                    file_name=f"이서블리_{cur_mode}_{sel_idx+1}.zip",
                     mime="application/zip",
-                    use_container_width=True
+                    use_container_width=True,
+                    key=f"zip_dl_{item_uid}"
                 )
 
         if cur_item["images"]:
@@ -1273,7 +1366,7 @@ with left_col:
             value=cur_item["body"],
             height=360,
             label_visibility="collapsed",
-            key=f"res_body_{sel_idx}"
+            key=f"res_body_{item_uid}"
         )
 
         tag_cnt = len([t for t in cur_item["tags"].split(",") if t.strip()])
@@ -1283,10 +1376,10 @@ with left_col:
             value=cur_item["tags"],
             height=75,
             label_visibility="collapsed",
-            key=f"res_tags_{sel_idx}"
+            key=f"res_tags_{item_uid}"
         )
     else:
-        st.info("위에서 기사 URL을 입력하거나 맛집 사진을 업로드한 뒤 변환 버튼을 누르면 이곳에 원고와 사진이 생성됩니다.")
+        st.info(f"[{mode_kor}] 탭에서 생성된 원고가 아직 없습니다. 위에서 입력 후 변환 버튼을 눌러주세요.")
 
 # ==========================================================
 # 우측 전용 사이드 패널: 일 방문자 1만+ 트래픽 공략 & 운영 메모장
