@@ -8,6 +8,7 @@ import html
 import io
 import json
 import zipfile
+import time
 from datetime import datetime
 from PIL import Image, ImageEnhance, ImageOps
 from google import genai
@@ -860,19 +861,24 @@ def extract_blog_text_and_photos(raw_url):
 
 def generate_with_gemini(contents, sys_prompt):
     last_err = None
-    for m_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash"]:
-        try:
-            resp = client.models.generate_content(
-                model=m_name,
-                contents=contents,
-                config=types.GenerateContentConfig(system_instruction=sys_prompt),
-            )
-            if resp and resp.text:
-                return resp.text
-        except Exception as e:
-            last_err = e
-            continue
-    raise RuntimeError(f"AI 원고 생성 실패 (API 키 또는 할당량 확인 필요): {last_err}")
+    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.5-pro"]
+    for attempt in range(3):
+        for m_name in models_to_try:
+            try:
+                resp = client.models.generate_content(
+                    model=m_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(system_instruction=sys_prompt),
+                )
+                if resp and resp.text:
+                    return resp.text
+            except Exception as e:
+                last_err = e
+                err_str = str(e)
+                if "503" in err_str or "429" in err_str or "UNAVAILABLE" in err_str:
+                    time.sleep(2.5)
+                continue
+    raise RuntimeError(f"AI 원고 생성 실패 (구글 서버 일시 혼잡, 잠시 후 다시 눌러주세요): {last_err}")
 
 # ==========================================
 # 세션 상태 초기화 (탭별 100% 독립 저장소)
