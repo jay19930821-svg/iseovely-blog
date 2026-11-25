@@ -8,6 +8,7 @@ import html
 import io
 import json
 import zipfile
+import base64
 from datetime import datetime
 from PIL import Image, ImageEnhance, ImageOps
 from google import genai
@@ -23,7 +24,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 커스텀 CSS (상단 여백 확보 + PC 프로그램 컬러감 유지)
 st.markdown("""
 <style>
     .block-container {
@@ -102,7 +102,6 @@ def check_password():
 if not check_password():
     st.stop()
 
-# 제미나이 API 클라이언트 초기화
 default_api_key = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
 with st.sidebar:
     st.header("⚙️ API 및 환경 설정")
@@ -117,7 +116,7 @@ if not api_key_input:
 
 client = genai.Client(
     api_key=api_key_input.strip(),
-    http_options=types.HttpOptions(timeout=50000)
+    http_options=types.HttpOptions(timeout=60000)
 )
 
 # ==========================================
@@ -135,13 +134,13 @@ DEFAULT_STRATEGY_MEMO = """📌 [일 방문자 1만+ 달성 운영 매뉴얼]
 • [밤 22:00 ~ 24:00] 저녁 포토월·인스타 업로드 (다음 날 새벽 홈피드 유입)
 
 3️⃣ 모드별 소재 활용 팁
-• [👗 패션·착장 모드]: 공항패션, 사복, 제작발표회, 가방·뷰티 아이템
+• [👗 패션·착장 모드]: 실시간 뉴스 1~20위 + 연예인 패션 블로그 인기글 1~20위 동시 활용
 • [🔥 연예인 이슈 모드]: 예능 하이라이트, 드라마 비하인드, 열애/결혼, 컴백 근황
 • [🍽️ 맛집 후기 모드]: 직접 찍은 사진 불러오기 → 체험단 가이드라인 입력 후 바로 생성
 
 4️⃣ 자동화 프로그램 30초 발행 순서
 ① 상단에서 [👗 패션], [🔥 이슈], [🍽️ 맛집] 모드 선택
-② 실시간 1~20위 기사 선택 또는 맛집 사진 업로드
+② 실시간 1~20위 기사/블로그 선택 또는 맛집 사진 업로드
 ③ 생성 완료 후 [원고 서식 그대로 복사] → 에디터 Ctrl+V
 ④ [가공된 사진 ZIP 다운로드] → 압축 풀기 후 사진 배치 & 태그 30개 복사!
 
@@ -504,7 +503,68 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
     components.html(comp_html, height=48)
 
 # ==========================================
-# 이미지 가공 및 통합 실시간 뉴스 크롤링 엔진
+# 구글 뉴스 암호화 링크(CBMi...) 실제 URL 해독기
+# ==========================================
+def decode_google_news_url(source_url):
+    """news.google.com/rss/articles/CBMi... 주소를 실제 언론사/블로그 원문 URL로 변환"""
+    if "news.google.com" not in source_url:
+        return source_url
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    }
+
+    # 1차: base64 토큰 내부에 평문 URL이 포함된 구형/하이브리드 포맷 추출
+    try:
+        path_part = urllib.parse.urlparse(source_url).path.split("/")[-1]
+        padded = path_part + "=" * (-len(path_part) % 4)
+        decoded_bytes = base64.urlsafe_b64decode(padded)
+        url_match = re.search(rb"https?://[^\x00-\x1f\x7f\"'<>]+", decoded_bytes)
+        if url_match:
+            cand = url_match.group(0).decode("utf-8", errors="ignore")
+            if "news.google.com" not in cand:
+                return cand
+    except Exception:
+        pass
+
+    # 2차: Google News batchexecute API를 통한 신형 CBMi 토큰 해독
+    try:
+        article_id = urllib.parse.urlparse(source_url).path.split("/")[-1]
+        fetch_u = f"https://news.google.com/articles/{article_id}"
+        req = urllib.request.Request(fetch_u, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_str = resp.read().decode("utf-8", errors="ignore")
+
+        ts_m = re.search(r'data-n-a-ts=["\'](\d+)["\']', html_str)
+        sg_m = re.search(r'data-n-a-sg=["\']([^"\']+)["\']', html_str)
+        if ts_m and sg_m:
+            ts_val = ts_m.group(1)
+            sg_val = sg_m.group(1)
+            payload_inner = f'["garturlreq",[["X","X",["X","X"],null,null,1,1,"KR:ko",null,1,null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{article_id}",{ts_val},"{sg_val}"]'
+            req_body = urllib.parse.urlencode({
+                "f.req": json.dumps([[["Fbv4je", payload_inner, None, "generic"]]])
+            }).encode("utf-8")
+
+            api_req = urllib.request.Request(
+                "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+                data=req_body,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                    "User-Agent": headers["User-Agent"],
+                },
+            )
+            with urllib.request.urlopen(api_req, timeout=10) as api_resp:
+                api_txt = api_resp.read().decode("utf-8", errors="ignore")
+            real_m = re.search(r'\["garturlres","(https?://[^"]+)"', api_txt)
+            if real_m:
+                return real_m.group(1).replace("\\u003d", "=").replace("\\u0026", "&")
+    except Exception:
+        pass
+
+    return source_url
+
+# ==========================================
+# 이미지 가공 및 본문/사진 파싱 엔진
 # ==========================================
 def process_unique_image(pil_img, apply_crop=True):
     rgb_im = ImageOps.exif_transpose(pil_img).convert("RGB")
@@ -536,7 +596,8 @@ def normalize_blog_url(raw_url):
     return u
 
 def extract_blog_text_and_photos(raw_url):
-    url = normalize_blog_url(raw_url)
+    decoded_url = decode_google_news_url(raw_url.strip())
+    url = normalize_blog_url(decoded_url)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -551,21 +612,12 @@ def extract_blog_text_and_photos(raw_url):
         except UnicodeDecodeError:
             page_html = raw_bytes.decode("euc-kr", errors="ignore")
 
-    if "news.google.com" in final_url:
-        ext_m = re.search(r'href=["\'](https?://(?!(?:news\.google|www\.google|accounts\.google))[^"\']+)["\']', page_html)
-        if ext_m:
-            real_news_url = html.unescape(ext_m.group(1))
-            req2 = urllib.request.Request(real_news_url, headers=headers)
-            with urllib.request.urlopen(req2, timeout=15) as resp2:
-                final_url = resp2.geturl()
-                raw_bytes2 = resp2.read()
-                try:
-                    page_html = raw_bytes2.decode("utf-8")
-                except UnicodeDecodeError:
-                    page_html = raw_bytes2.decode("euc-kr", errors="ignore")
-
     og_title = re.search(r'(?:property|name)=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
-    page_title = html.unescape(og_title.group(1)).strip() if og_title else "블로그 포스팅"
+    if og_title:
+        page_title = html.unescape(og_title.group(1)).strip()
+    else:
+        t_m = re.search(r"<title>(.*?)</title>", page_html, re.IGNORECASE | re.DOTALL)
+        page_title = html.unescape(t_m.group(1)).strip() if t_m else "포스팅 원문"
 
     body_html = ""
     se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
@@ -697,16 +749,25 @@ def extract_blog_text_and_photos(raw_url):
     lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
     return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
 
-def fetch_top20_ent_news(custom_keyword=""):
-    """구글 뉴스 한국어 엔터테인먼트 토픽 랭킹 + 네이트 연예 랭킹에서 통합 1~20위 실시간 수집"""
+def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
+    """
+    mode_type == 'news': 실시간 연예·패션 통합 랭킹 1~20위
+    mode_type == 'fashion_blog': 연예인 패션 블로그 글쓰는 인기 블로거 1~20위
+    """
     results = []
     seen_titles = set()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     }
 
-    # 1) 사용자 지정 키워드가 있으면 해당 검색 RSS 우선 수집, 없으면 구글 뉴스 한국 엔터테인먼트 공식 랭킹 토픽 수집
-    if custom_keyword.strip():
+    if mode_type == "fashion_blog":
+        q_blog = custom_keyword.strip() or 'site:blog.naver.com "연예인" ("패션" OR "공항패션" OR "사복패션" OR "착장")'
+        if custom_keyword.strip() and "site:blog.naver.com" not in custom_keyword:
+            q_blog = f'site:blog.naver.com "{custom_keyword.strip()}" ("패션" OR "착장" OR "코디")'
+        rss_targets = [
+            ("패션블로그", f"https://news.google.com/rss/search?q={urllib.parse.quote(q_blog)}&hl=ko&gl=KR&ceid=KR:ko")
+        ]
+    elif custom_keyword.strip():
         rss_targets = [
             (f"검색({custom_keyword.strip()})", f"https://news.google.com/rss/search?q={urllib.parse.quote(custom_keyword.strip())}&hl=ko&gl=KR&ceid=KR:ko")
         ]
@@ -721,7 +782,7 @@ def fetch_top20_ent_news(custom_keyword=""):
             req = urllib.request.Request(rss_u, headers=headers)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 root_xml = ET.fromstring(resp.read())
-            for item in root_xml.findall(".//item")[:15]:
+            for item in root_xml.findall(".//item")[:22]:
                 t_el, l_el = item.find("title"), item.find("link")
                 if t_el is not None and l_el is not None and t_el.text and l_el.text:
                     clean_t = html.unescape(t_el.text).strip()
@@ -735,8 +796,7 @@ def fetch_top20_ent_news(custom_keyword=""):
         except Exception:
             continue
 
-    # 2) 네이트 연예 랭킹에서도 추가 수집 (총 20위까지 채움)
-    if not custom_keyword.strip() and len(results) < 20:
+    if mode_type == "news" and not custom_keyword.strip() and len(results) < 20:
         try:
             req_n = urllib.request.Request("https://news.nate.com/rank/interest?sc=ent", headers=headers)
             with urllib.request.urlopen(req_n, timeout=8) as resp_n:
@@ -757,6 +817,23 @@ def fetch_top20_ent_news(custom_keyword=""):
 
     return results[:20]
 
+def generate_with_gemini(contents, sys_prompt):
+    """안정적인 최신 제미나이 모델 순차 호출 및 명확한 에러 반환"""
+    last_err = None
+    for m_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+        try:
+            resp = client.models.generate_content(
+                model=m_name,
+                contents=contents,
+                config=types.GenerateContentConfig(system_instruction=sys_prompt),
+            )
+            if resp and resp.text:
+                return resp.text
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"AI 원고 생성 실패 (API 키 또는 할당량 확인 필요): {last_err}")
+
 # ==========================================
 # 세션 상태 초기화
 # ==========================================
@@ -772,12 +849,11 @@ if "crawled_news" not in st.session_state:
     st.session_state["crawled_news"] = []
 
 # ==========================================
-# 메인 2단 레이아웃 (좌측: 3탭 올인원 작업창 / 우측: 운영 매뉴얼 메모장)
+# 메인 2단 레이아웃
 # ==========================================
 left_col, right_col = st.columns([2.4, 1.0], gap="medium")
 
 with left_col:
-    # 상단 3대 모드 전환 탭 바
     t_col1, t_col2, t_col3 = st.columns(3, gap="small")
     with t_col1:
         if st.button(
@@ -813,49 +889,64 @@ with left_col:
     else:
         st.markdown('<div class="mode-banner-food">🍽️ 현재 모드: [맛집 후기 자동화 전용] — 직접 찍은 음식·매장 사진 분석 + 협찬/체험단 가이드라인을 반영해 작성합니다.</div>', unsafe_allow_html=True)
 
-    # 0. 문체 스타일 선택
     style_choice = st.selectbox(
         "0. 적용할 블로그 문체 스타일 선택 (심플 3색 파스텔 형광펜 · 포인트 글자색 · 인용구 자동 적용)",
         list(DEFAULT_STYLES.keys())
     )
 
-    # ==========================================================
-    # 입력 영역 분기: [패션/이슈 URL 모드] vs [맛집 사진 업로드 모드]
-    # ==========================================================
     if cur_mode in ("fashion", "issue"):
         is_issue = (cur_mode == "issue")
 
-        # 통합 1~20위 실시간 기사 수집 박스 (항상 바로 펼쳐져 한눈에 확인 가능)
         with st.container(border=True):
-            st.markdown("**🔥 실시간 연예·패션 통합 랭킹 1~20위 긁어오기**")
-            nc1, nc2, nc3 = st.columns([2.2, 2.2, 1.4])
-            with nc1:
-                if st.button("🏆 실시간 통합 1~20위 불러오기", type="primary", use_container_width=True):
-                    with st.spinner("실시간 연예·패션 통합 1~20위 기사를 불러오는 중..."):
-                        st.session_state["crawled_news"] = fetch_top20_ent_news("")
-            with nc2:
-                custom_kw = st.text_input(
-                    "특정 연예인/키워드 검색",
-                    placeholder="특정 키워드 검색 시 입력 (비워두면 전체 1~20위)",
-                    label_visibility="collapsed"
-                )
-            with nc3:
-                if st.button("🔍 키워드 검색", use_container_width=True):
-                    with st.spinner(f"'{custom_kw}' 관련 기사 검색 중..."):
-                        st.session_state["crawled_news"] = fetch_top20_ent_news(custom_kw)
+            st.markdown("**🔥 실시간 연예·패션 통합 랭킹 & 패션 블로그 인기글 1~20위 긁어오기**")
+            if not is_issue:
+                nc1, nc2, nc3, nc4 = st.columns([1.8, 2.0, 1.8, 1.1])
+                with nc1:
+                    if st.button("🏆 뉴스 통합 1~20위", type="primary", use_container_width=True):
+                        with st.spinner("실시간 연예·패션 뉴스 1~20위를 불러오는 중..."):
+                            st.session_state["crawled_news"] = fetch_top20_ent_news("", mode_type="news")
+                with nc2:
+                    if st.button("👗 패션 블로그 인기 1~20위", type="primary", use_container_width=True):
+                        with st.spinner("네이버 연예인 패션 인기 블로그 1~20위를 불러오는 중..."):
+                            st.session_state["crawled_news"] = fetch_top20_ent_news("", mode_type="fashion_blog")
+                with nc3:
+                    custom_kw = st.text_input(
+                        "키워드 검색",
+                        placeholder="연예인/아이템 검색",
+                        label_visibility="collapsed"
+                    )
+                with nc4:
+                    if st.button("🔍 검색", use_container_width=True):
+                        with st.spinner(f"'{custom_kw}' 검색 중..."):
+                            st.session_state["crawled_news"] = fetch_top20_ent_news(custom_kw, mode_type="news")
+            else:
+                nc1, nc2, nc3 = st.columns([2.2, 2.2, 1.4])
+                with nc1:
+                    if st.button("🏆 실시간 통합 1~20위 불러오기", type="primary", use_container_width=True):
+                        with st.spinner("실시간 연예·이슈 통합 1~20위 기사를 불러오는 중..."):
+                            st.session_state["crawled_news"] = fetch_top20_ent_news("", mode_type="news")
+                with nc2:
+                    custom_kw = st.text_input(
+                        "특정 연예인/키워드 검색",
+                        placeholder="특정 키워드 검색 시 입력 (비워두면 전체 1~20위)",
+                        label_visibility="collapsed"
+                    )
+                with nc3:
+                    if st.button("🔍 키워드 검색", use_container_width=True):
+                        with st.spinner(f"'{custom_kw}' 관련 기사 검색 중..."):
+                            st.session_state["crawled_news"] = fetch_top20_ent_news(custom_kw, mode_type="news")
 
-            # 수집된 1~20위 기사 체크박스 목록 바로 표시
             if st.session_state["crawled_news"]:
-                st.caption(f"총 {len(st.session_state['crawled_news'])}개의 실시간 기사가 수집되었습니다. 아래에서 원하는 기사를 체크한 뒤 [선택한 기사 URL 입력창에 넣기]를 눌러주세요.")
+                st.caption(f"총 {len(st.session_state['crawled_news'])}개의 인기 글/기사가 수집되었습니다. 체크 후 아래 버튼을 눌러주세요.")
                 selected_urls = []
                 with st.container(height=230):
                     for idx_n, item in enumerate(st.session_state["crawled_news"], start=1):
                         if st.checkbox(f"{idx_n:02d}위. [{item['source']}] {item['title']}", key=f"news_chk_{idx_n}"):
                             selected_urls.append(item["url"])
 
-                if st.button("✅ 선택한 기사 URL 아래 입력창에 넣기", type="primary", use_container_width=True):
+                if st.button("✅ 선택한 기사/블로그 URL 아래 입력창에 넣기", type="primary", use_container_width=True):
                     if not selected_urls:
-                        st.warning("위 목록에서 기사를 하나 이상 체크해 주세요!")
+                        st.warning("위 목록에서 항목을 하나 이상 체크해 주세요!")
                     else:
                         existing_u = st.session_state.get("url_input_val", "").strip()
                         new_u = "\n".join(selected_urls)
@@ -875,7 +966,7 @@ with left_col:
             value=st.session_state.get("url_input_val", ""),
             height=95,
             label_visibility="collapsed",
-            placeholder="https://blog.naver.com/... 또는 위 실시간 1~20위에서 선택한 기사 주소가 자동으로 들어갑니다"
+            placeholder="https://blog.naver.com/... 또는 위 실시간 1~20위에서 선택한 주소가 자동으로 들어갑니다"
         )
         st.session_state["url_input_val"] = url_box
 
@@ -893,13 +984,16 @@ with left_col:
                 mode_tag = "[이슈]" if is_issue else "[패션]"
                 active_rules = ISSUE_FORMAT_RULES if is_issue else FASHION_FORMAT_RULES
                 sys_prompt = DEFAULT_STYLES[style_choice] + active_rules
+                generated_any = False
 
                 for idx, target_u in enumerate(urls, start=1):
-                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 상위 5% 원고 작성 중..."):
+                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 원문 추출 및 상위 5% 황금 글자 수 원고 작성 중..."):
                         try:
                             p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u)
-                            img_cnt = len(img_bytes_list)
+                            if len(o_body.strip()) < 60:
+                                raise ValueError("해당 링크에서 본문 텍스트를 읽어오지 못했습니다. 다른 기사나 블로그 URL을 선택해 주세요.")
 
+                            img_cnt = len(img_bytes_list)
                             mode_inst = (
                                 "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
                                 if is_issue
@@ -923,53 +1017,41 @@ with left_col:
                                 contents.append(f"[첨부 사진 {i_idx}번]")
                                 contents.append(th)
 
-                            full_resp = ""
-                            for m_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash"]:
-                                try:
-                                    resp = client.models.generate_content(
-                                        model=m_name,
-                                        contents=contents,
-                                        config=types.GenerateContentConfig(system_instruction=sys_prompt),
-                                    )
-                                    if resp.text:
-                                        full_resp = resp.text
-                                        break
-                                except Exception:
-                                    continue
+                            full_resp = generate_with_gemini(contents, sys_prompt)
 
-                            if full_resp:
-                                if "===TAGS===" in full_resp:
-                                    b_part, t_part = full_resp.split("===TAGS===", 1)
-                                    body_clean = format_mobile_paragraph_spacing(b_part.strip())
-                                    tags_list = [t.strip().lstrip("#") for t in t_part.split(",") if t.strip()][:30]
-                                    tags_clean = ", ".join(dict.fromkeys(tags_list))
-                                else:
-                                    body_clean = format_mobile_paragraph_spacing(full_resp.strip())
-                                    tags_clean = ""
+                            if "===TAGS===" in full_resp:
+                                b_part, t_part = full_resp.split("===TAGS===", 1)
+                                body_clean = format_mobile_paragraph_spacing(b_part.strip())
+                                tags_list = [t.strip().lstrip("#") for t in t_part.split(",") if t.strip()][:30]
+                                tags_clean = ", ".join(dict.fromkeys(tags_list))
+                            else:
+                                body_clean = format_mobile_paragraph_spacing(full_resp.strip())
+                                tags_clean = ""
 
-                                plain_clean = strip_all_markers(body_clean)
-                                c_len = len(re.sub(r"\s+", "", plain_clean))
-                                ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                label_str = f"{ts_str}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
+                            plain_clean = strip_all_markers(body_clean)
+                            c_len = len(re.sub(r"\s+", "", plain_clean))
+                            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            label_str = f"{ts_str}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
-                                st.session_state["archive_list"].insert(0, {
-                                    "label": label_str,
-                                    "title": p_title,
-                                    "body": body_clean,
-                                    "html": build_naver_html(body_clean),
-                                    "plain": plain_clean,
-                                    "tags": tags_clean,
-                                    "images": img_bytes_list,
-                                    "char_count": c_len,
-                                })
-                                st.session_state["selected_archive_idx"] = 0
+                            st.session_state["archive_list"].insert(0, {
+                                "label": label_str,
+                                "title": p_title,
+                                "body": body_clean,
+                                "html": build_naver_html(body_clean),
+                                "plain": plain_clean,
+                                "tags": tags_clean,
+                                "images": img_bytes_list,
+                                "char_count": c_len,
+                            })
+                            st.session_state["selected_archive_idx"] = 0
+                            generated_any = True
                         except Exception as e:
                             st.error(f"{idx}번 URL 처리 오류: {e}")
 
+                if generated_any:
+                    st.success("✅ 원고 변환 및 보관함 저장이 완료되었습니다! 아래 2번·3번 영역에서 바로 복사하세요.")
+
     else:
-        # ==========================================================
-        # [탭 3: 맛집 후기 자동화 모드 UI]
-        # ==========================================================
         st.markdown("**1. 직접 찍은 맛집 사진 불러오기 (최대 15장 · 갤럭시/아이폰/PC 사진 선택)**")
         uploaded_food_files = st.file_uploader(
             "맛집 사진 선택",
@@ -1029,47 +1111,35 @@ with left_col:
                             contents.append(f"[첨부 사진 {i_idx}번]")
                             contents.append(th)
 
-                        full_resp = ""
-                        for m_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash"]:
-                            try:
-                                resp = client.models.generate_content(
-                                    model=m_name,
-                                    contents=contents,
-                                    config=types.GenerateContentConfig(system_instruction=sys_prompt),
-                                )
-                                if resp.text:
-                                    full_resp = resp.text
-                                    break
-                            except Exception:
-                                continue
+                        full_resp = generate_with_gemini(contents, sys_prompt)
 
-                        if full_resp:
-                            if "===TAGS===" in full_resp:
-                                b_part, t_part = full_resp.split("===TAGS===", 1)
-                                body_clean = format_mobile_paragraph_spacing(b_part.strip())
-                                tags_list = [t.strip().lstrip("#") for t in t_part.split(",") if t.strip()][:30]
-                                tags_clean = ", ".join(dict.fromkeys(tags_list))
-                            else:
-                                body_clean = format_mobile_paragraph_spacing(full_resp.strip())
-                                tags_clean = ""
+                        if "===TAGS===" in full_resp:
+                            b_part, t_part = full_resp.split("===TAGS===", 1)
+                            body_clean = format_mobile_paragraph_spacing(b_part.strip())
+                            tags_list = [t.strip().lstrip("#") for t in t_part.split(",") if t.strip()][:30]
+                            tags_clean = ", ".join(dict.fromkeys(tags_list))
+                        else:
+                            body_clean = format_mobile_paragraph_spacing(full_resp.strip())
+                            tags_clean = ""
 
-                            plain_clean = strip_all_markers(body_clean)
-                            c_len = len(re.sub(r"\s+", "", plain_clean))
-                            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            title_clean = store_name_input.strip()
-                            label_str = f"{ts_str}_[맛집]_{title_clean[:24]} [보정사진 {img_cnt}장 · 공백제외 {c_len}자]"
+                        plain_clean = strip_all_markers(body_clean)
+                        c_len = len(re.sub(r"\s+", "", plain_clean))
+                        ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        title_clean = store_name_input.strip()
+                        label_str = f"{ts_str}_[맛집]_{title_clean[:24]} [보정사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
-                            st.session_state["archive_list"].insert(0, {
-                                "label": label_str,
-                                "title": title_clean,
-                                "body": body_clean,
-                                "html": build_naver_html(body_clean),
-                                "plain": plain_clean,
-                                "tags": tags_clean,
-                                "images": food_img_bytes,
-                                "char_count": c_len,
-                            })
-                            st.session_state["selected_archive_idx"] = 0
+                        st.session_state["archive_list"].insert(0, {
+                            "label": label_str,
+                            "title": title_clean,
+                            "body": body_clean,
+                            "html": build_naver_html(body_clean),
+                            "plain": plain_clean,
+                            "tags": tags_clean,
+                            "images": food_img_bytes,
+                            "char_count": c_len,
+                        })
+                        st.session_state["selected_archive_idx"] = 0
+                        st.success("✅ 맛집 후기 원고 및 보정 사진이 생성되었습니다!")
                     except Exception as e:
                         st.error(f"맛집 원고 생성 중 오류 발생: {e}")
 
