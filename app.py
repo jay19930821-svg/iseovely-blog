@@ -506,6 +506,9 @@ def render_web_copy_button(html_payload, plain_payload, btn_label="📋 원고 �
 # ==========================================
 # 구글 뉴스 암호화 링크 해독 & 원문/고화질 사진 추출 엔진
 # ==========================================
+# ==========================================
+# 직통 원문 URL 추적 & 고화질 보도사진 추출 엔진
+# ==========================================
 def decode_google_news_url(source_url):
     if "news.google.com" not in source_url:
         return source_url
@@ -518,6 +521,7 @@ def decode_google_news_url(source_url):
         ("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8"),
     ]
 
+    # 1차: base64 토큰 내부 평문 URL 추출
     try:
         path_part = urllib.parse.urlparse(source_url).path.split("/")[-1]
         padded = path_part + "=" * (-len(path_part) % 4)
@@ -530,9 +534,10 @@ def decode_google_news_url(source_url):
     except Exception:
         pass
 
+    # 2차: Google News batchexecute 호출
     try:
         article_id = urllib.parse.urlparse(source_url).path.split("/")[-1]
-        fetch_u = f"https://news.google.com/rss/articles/{article_id}?oc=5"
+        fetch_u = f"https://news.google.com/articles/{article_id}"
         with opener.open(fetch_u, timeout=10) as resp:
             final_u = resp.geturl()
             if "news.google.com" not in final_u:
@@ -595,56 +600,6 @@ def normalize_blog_url(raw_url):
         u = u.replace("https://blog.naver.com/", "https://m.blog.naver.com/").replace("http://blog.naver.com/", "https://m.blog.naver.com/")
     return u
 
-def fetch_fallback_images_by_title(query_title, max_imgs=6):
-    clean_q = re.sub(r"\[[^\]]*\]|\([^\)]*\)|-\s*[^-]+$", " ", query_title)
-    clean_q = re.sub(r"\s+", " ", clean_q).strip()
-    if not clean_q:
-        return [], []
-
-    saved_bytes, ai_thumbs, tried = [], [], set()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-    }
-    try:
-        search_u = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_q)}&form=HDRSC2&first=1"
-        req = urllib.request.Request(search_u, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html_s = resp.read().decode("utf-8", errors="ignore")
-
-        murls = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', html_s)
-        if not murls:
-            murls = re.findall(r'"murl":"(https?://[^"]+?)"', html_s)
-
-        for img_u in murls:
-            if len(saved_bytes) >= max_imgs:
-                break
-            if img_u in tried or any(b in img_u.lower() for b in ["logo", "icon", "banner", "1x1", "avatar"]):
-                continue
-            tried.add(img_u)
-            try:
-                i_req = urllib.request.Request(img_u, headers={"User-Agent": headers["User-Agent"]})
-                with urllib.request.urlopen(i_req, timeout=6) as i_resp:
-                    raw_d = i_resp.read()
-                if len(raw_d) < 8000:
-                    continue
-                with Image.open(io.BytesIO(raw_d)) as im:
-                    if im.size[0] < 250 or im.size[1] < 200:
-                        continue
-                    edited_im = process_unique_image(im, apply_crop=True)
-                    buf = io.BytesIO()
-                    edited_im.save(buf, format="JPEG", quality=96, subsampling=0)
-                    saved_bytes.append(buf.getvalue())
-
-                    th = edited_im.copy()
-                    th.thumbnail((512, 512))
-                    ai_thumbs.append(th)
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return saved_bytes, ai_thumbs
-
 def scrape_single_url_raw(raw_url):
     decoded_url = decode_google_news_url(raw_url.strip())
     url = normalize_blog_url(decoded_url)
@@ -686,10 +641,11 @@ def scrape_single_url_raw(raw_url):
         body_html = sub_html[:end_m.start()] if end_m else sub_html[:150000]
     else:
         for pattern in [
+            r'id=["\']realArtcContents["\'][^>]*>(.*?)</div>\s*<!--',
+            r'id=["\']artcContents["\'][^>]*>(.*?)</div>',
             r'id=["\']comp_news_article["\'][^>]*>(.*?)</article>',
             r'id=["\']dic_area["\'][^>]*>(.*?)</article>',
             r'id=["\']articleBody["\'][^>]*>(.*?)</(?:div|article|section)>',
-            r'id=["\']artcContents["\'][^>]*>(.*?)</div>',
             r'itemprop=["\']articleBody["\'][^>]*>(.*?)</(?:div|article|section)>',
             r'class=["\'][^"\']*(?:article[_-]body|news[_-]view|view[_-]con|article[_-]txt|read[_-]body)[^"\']*["\'][^>]*>(.*?)</(?:div|article|section)>',
             r'<article[^>]*>(.*?)</article>',
@@ -704,15 +660,27 @@ def scrape_single_url_raw(raw_url):
     clean_html = re.sub(r"<script.*?>.*?</script>", "", body_html, flags=re.DOTALL)
     clean_html = re.sub(r"<style.*?>.*?</style>", "", clean_html, flags=re.DOTALL)
 
-    bad_words = ["logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar", "profile", "blank", "emoticon", "sticker", "map", "static.naver", "blogpfthumb", "ogq", "gfmarket", "storep", "transparent", "journalist", "reporter", "sns_"]
+    bad_words = ["logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar", "profile", "blank", "emoticon", "sticker", "map", "static.naver", "blogpfthumb", "ogq", "gfmarket", "storep", "transparent", "journalist", "reporter", "sns_", "copyright", "qr"]
     saved_images_bytes = []
     ai_thumbs = []
     url_to_photo_tag = {}
     tried_urls = set()
 
     def try_fetch_image_bytes(target_img_url):
+        # 네이트 썸네일 프록시(//thumbnews.nateimg.co.kr/view610///http://...)를 고화질 원본과 함께 시도
+        candidates = [target_img_url]
+        if "thumbnews.nateimg.co.kr" in target_img_url and "///" in target_img_url:
+            orig_part = target_img_url.split("///", 1)[1]
+            if orig_part.startswith("//"):
+                orig_part = "https:" + orig_part
+            elif not orig_part.startswith("http"):
+                orig_part = "https://" + orig_part
+            candidates.insert(0, orig_part)
+
         base_u = target_img_url.split("?")[0]
-        candidates = [base_u + "?type=w966", base_u, target_img_url] if ("postfiles.pstatic.net" in base_u or "blogfiles.pstatic.net" in base_u) else [target_img_url, base_u]
+        if "postfiles.pstatic.net" in base_u or "blogfiles.pstatic.net" in base_u:
+            candidates = [base_u + "?type=w966", base_u, target_img_url]
+
         dl_headers = {
             "User-Agent": headers["User-Agent"],
             "Referer": final_url,
@@ -750,7 +718,7 @@ def scrape_single_url_raw(raw_url):
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
-                if im.size[0] < 200 or im.size[1] < 160:
+                if im.size[0] < 180 or im.size[1] < 150:
                     return None
                 edited_im = process_unique_image(im, apply_crop=True)
                 buf = io.BytesIO()
@@ -793,7 +761,7 @@ def scrape_single_url_raw(raw_url):
 
     if len(saved_images_bytes) < 10:
         raw_cdn_imgs = re.findall(
-            r'https?://(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|https?://[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
+            r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|(?:https?:)?//[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
             html.unescape(clean_html),
             re.IGNORECASE,
         )
@@ -819,11 +787,6 @@ def scrape_single_url_raw(raw_url):
 def extract_blog_text_and_photos(raw_url, cached_meta=None):
     p_title, o_body, img_bytes, ai_thumbs = scrape_single_url_raw(raw_url)
     if len(o_body.strip()) >= 150:
-        if len(img_bytes) == 0 and p_title:
-            img_bytes, ai_thumbs = fetch_fallback_images_by_title(p_title, max_imgs=5)
-            if img_bytes:
-                markers = "\n".join([f"[사진 {i+1}]" for i in range(len(img_bytes))])
-                o_body = markers + "\n" + o_body
         return p_title, o_body, img_bytes, ai_thumbs
 
     fallback_title = (cached_meta or {}).get("title", "") or p_title
@@ -838,7 +801,7 @@ def extract_blog_text_and_photos(raw_url, cached_meta=None):
                 root_xml = ET.fromstring(resp.read())
 
             collected_snippets = [fallback_summary] if fallback_summary else []
-            for item in root_xml.findall(".//item")[:5]:
+            for item in root_xml.findall(".//item")[:6]:
                 l_el = item.find("link")
                 d_el = item.find("description")
                 if d_el is not None and d_el.text:
@@ -848,20 +811,12 @@ def extract_blog_text_and_photos(raw_url, cached_meta=None):
                 if l_el is not None and l_el.text:
                     t2, b2, imgs2, th2 = scrape_single_url_raw(l_el.text.strip())
                     if len(b2.strip()) >= 150:
-                        if len(imgs2) == 0:
-                            imgs2, th2 = fetch_fallback_images_by_title(fallback_title, max_imgs=5)
                         return fallback_title, b2, imgs2, th2
 
-            if len(img_bytes) == 0:
-                img_bytes, ai_thumbs = fetch_fallback_images_by_title(fallback_title, max_imgs=5)
-
-            markers_prefix = "\n".join([f"[사진 {i+1}]" for i in range(len(img_bytes))]) + "\n" if img_bytes else ""
-            combined_text = f"{markers_prefix}기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets)
+            combined_text = f"기사 제목: {fallback_title}\n\n" + "\n\n".join(collected_snippets)
             if len(combined_text.strip()) >= 40:
                 return fallback_title, combined_text, img_bytes, ai_thumbs
         except Exception:
-            if len(img_bytes) == 0:
-                img_bytes, ai_thumbs = fetch_fallback_images_by_title(fallback_title, max_imgs=5)
             return fallback_title, f"기사 제목: {fallback_title}\n{fallback_summary}", img_bytes, ai_thumbs
 
     return p_title, o_body, img_bytes, ai_thumbs
@@ -873,6 +828,30 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 
+    # 1순위: 네이트 연예 랭킹 (직통 URL이라 고화질 보도사진 100% 추출 가능!)
+    if mode_type == "news" and not custom_keyword.strip():
+        try:
+            req_n = urllib.request.Request("https://news.nate.com/rank/interest?sc=ent", headers=headers)
+            with urllib.request.urlopen(req_n, timeout=10) as resp_n:
+                raw_b = resp_n.read()
+                try:
+                    h_str = raw_b.decode("euc-kr")
+                except UnicodeDecodeError:
+                    h_str = raw_b.decode("utf-8", errors="ignore")
+            for href, inner_html in re.findall(r'<a[^>]+href=["\']((?:https?:)?//news\.nate\.com/view/[^"\']+)["\'][^>]*>(.*?)</a>', h_str, re.DOTALL | re.IGNORECASE):
+                clean_u = ("https:" + href if href.startswith("//") else href).split("?")[0]
+                tit_m = re.search(r'class=["\'][^"\']*tit[^"\']*["\'][^>]*>(.*?)</', inner_html, re.DOTALL | re.IGNORECASE)
+                title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", tit_m.group(1) if tit_m else inner_html))).strip()
+                if len(title_txt) >= 10 and title_txt not in seen_titles and len(results) < 20:
+                    seen_titles.add(title_txt)
+                    results.append({"source": "네이트연예", "title": title_txt, "url": clean_u, "summary": title_txt})
+        except Exception:
+            pass
+
+    if len(results) >= 20:
+        return results[:20]
+
+    # 2순위: 구글 뉴스 RSS (키워드 검색 / 패션 블로그 검색 / 네이트 부족분 보충)
     if mode_type == "fashion_blog":
         q_blog = custom_keyword.strip() or 'site:blog.naver.com "연예인" ("패션" OR "공항패션" OR "사복패션" OR "착장")'
         if custom_keyword.strip() and "site:blog.naver.com" not in custom_keyword:
@@ -918,25 +897,6 @@ def fetch_top20_ent_news(custom_keyword="", mode_type="news"):
                         })
         except Exception:
             continue
-
-    if mode_type == "news" and not custom_keyword.strip() and len(results) < 20:
-        try:
-            req_n = urllib.request.Request("https://news.nate.com/rank/interest?sc=ent", headers=headers)
-            with urllib.request.urlopen(req_n, timeout=8) as resp_n:
-                raw_b = resp_n.read()
-                try:
-                    h_str = raw_b.decode("euc-kr")
-                except UnicodeDecodeError:
-                    h_str = raw_b.decode("utf-8", errors="ignore")
-            for href, inner_html in re.findall(r'<a[^>]+href=["\']((?:https?:)?//news\.nate\.com/view/[^"\']+)["\'][^>]*>(.*?)</a>', h_str, re.DOTALL | re.IGNORECASE):
-                clean_u = ("https:" + href if href.startswith("//") else href).split("?")[0]
-                tit_m = re.search(r'class=["\'][^"\']*tit[^"\']*["\'][^>]*>(.*?)</', inner_html, re.DOTALL | re.IGNORECASE)
-                title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", tit_m.group(1) if tit_m else inner_html))).strip()
-                if len(title_txt) >= 10 and title_txt not in seen_titles and len(results) < 20:
-                    seen_titles.add(title_txt)
-                    results.append({"source": "네이트연예", "title": title_txt, "url": clean_u, "summary": title_txt})
-        except Exception:
-            pass
 
     return results[:20]
 
