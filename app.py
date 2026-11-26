@@ -807,36 +807,32 @@ def fetch_fashion_blogs_top20():
     return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """네이버 블로그 본문 전용 고화질 사진(최대 10장) 정밀 추출 (광고·쇼핑·추천글 썸네일 완벽 차단)"""
+    """네이버 블로그 PostView 직통 파싱 + r.jina.ai 백업으로 본문 실제 사진(최대 10장) 100% 추출"""
     url = normalize_target_url(raw_url)
     is_naver_blog = ("blog.naver.com" in url)
-    final_url, page_html = fetch_html_smart(url)
+
+    # 네이버 블로그는 PostView.naver 직통 주소로 접근해야 해외 서버에서도 본문(se-main-container)과 지연로딩 이미지가 100% 열림
+    fetch_target = url
+    if is_naver_blog:
+        m_post = re.search(r"blog\.naver\.com/([a-zA-Z0-9_-]+)/(\d+)", url)
+        if m_post:
+            fetch_target = f"https://blog.naver.com/PostView.naver?blogId={m_post.group(1)}&logNo={m_post.group(2)}&redirect=Dlog&widgetTypeCall=true&directAccess=false"
+
+    final_url, page_html = fetch_html_smart(fetch_target, referer="https://m.blog.naver.com/")
+    if not page_html and fetch_target != url:
+        final_url, page_html = fetch_html_smart(url, referer="https://m.blog.naver.com/")
 
     bad_words = [
         "logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar",
         "profile", "blank", "emoticon", "sticker", "map", "static.naver",
         "blogpfthumb", "ogq", "gfmarket", "storep", "transparent",
         "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg",
-        "se-sticker", "link_thumb", "oglink", "dthumb-phinf", "shopping", "adpost"
+        "se-sticker", "link_thumb", "oglink", "dthumb-phinf", "shopping", "adpost", "phaser"
     ]
     saved_images_bytes = []
     ai_thumbs = []
     url_to_photo_tag = {}
     tried_urls = set()
-
-    def is_valid_naver_post_photo(u_str):
-        """네이버 블로그 본문 실제 업로드 이미지인지 판별 (광고/쇼핑/프로필/외부배너 차단)"""
-        low = u_str.lower()
-        if any(b in low for b in bad_words):
-            return False
-        if not is_naver_blog:
-            return True
-        # 네이버 블로그 본문 사진은 pstatic.net의 postfiles/blogfiles/mblogthumb-phinf 중 실제 포스팅 경로만 허용
-        if any(host in low for host in ("postfiles.pstatic.net", "blogfiles.pstatic.net", "mblogthumb-phinf.pstatic.net")):
-            # 블로그 포스팅 본문 이미지 경로는 /MjAy... (날짜 base64) 또는 /202... 형태를 가짐
-            if re.search(r"/(?:MjAy|202\d)", u_str):
-                return True
-        return False
 
     def try_fetch_image_bytes(target_img_url):
         candidates = [target_img_url]
@@ -855,7 +851,7 @@ def extract_blog_text_and_photos(raw_url):
 
         dl_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Referer": final_url,
+            "Referer": "https://m.blog.naver.com/" if is_naver_blog else final_url,
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         }
         for cand_u in candidates:
@@ -875,11 +871,14 @@ def extract_blog_text_and_photos(raw_url):
             u_clean = "https:" + u_clean
         elif u_clean.startswith("/"):
             u_clean = urllib.parse.urljoin(final_url, u_clean)
-        if not u_clean.startswith("http") or not is_valid_naver_post_photo(u_clean):
+        low_u = u_clean.lower()
+        if not u_clean.startswith("http") or any(b in low_u for b in bad_words):
+            return None
+        if is_naver_blog and not any(h in low_u for h in ("postfiles.pstatic.net", "blogfiles.pstatic.net", "mblogthumb-phinf.pstatic.net")):
             return None
 
         path_only = urllib.parse.urlparse(u_clean).path
-        base_key = path_only if ("pstatic.net" in u_clean or "nateimg.co.kr" in u_clean) else u_clean.split("?")[0]
+        base_key = path_only if ("pstatic.net" in low_u or "nateimg.co.kr" in low_u) else u_clean.split("?")[0]
         if base_key in url_to_photo_tag:
             return url_to_photo_tag[base_key]
         if base_key in tried_urls or len(saved_images_bytes) >= 10:
@@ -911,7 +910,7 @@ def extract_blog_text_and_photos(raw_url):
     page_title = "연예인 패션·이슈 기사"
     body_res = ""
 
-    # 경로 A: 직통 HTML 파싱
+    # 경로 A: 직통 HTML 파싱 (네이버 블로그 PostView 본문 컨테이너 정밀 타겟팅)
     if page_html:
         og_title = re.search(r'(?:property|name)=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
         if og_title:
@@ -925,7 +924,6 @@ def extract_blog_text_and_photos(raw_url):
         se_start = re.search(r'class=["\'][^"\']*se-main-container[^"\']*["\']', page_html, re.IGNORECASE)
         if se_start:
             sub_html = page_html[se_start.start():]
-            # 하단 추천글/다른글 영역 직전까지만 본문으로 제한
             end_m = re.search(
                 r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area|blog_author))',
                 sub_html,
@@ -953,7 +951,7 @@ def extract_blog_text_and_photos(raw_url):
 
         def replace_media_tag(match):
             tag_str = match.group(0)
-            if "oglink" in tag_str.lower() or "profile" in tag_str.lower():
+            if "oglink" in tag_str.lower() or "profile" in tag_str.lower() or "link_thumb" in tag_str.lower():
                 return "\n"
             candidate_src = ""
             linkdata_m = re.search(r'data-linkdata=["\']([^"\']+)["\']', tag_str, re.IGNORECASE)
@@ -975,7 +973,7 @@ def extract_blog_text_and_photos(raw_url):
 
         html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
-        # 본문 영역 내부의 실제 업로드 이미지 경로 전수 스캔 (최대 10장)
+        # 본문(body_html) 내부에서 아직 안 잡힌 pstatic.net / nateimg.co.kr 이미지 경로 전수 보충
         if len(saved_images_bytes) < 10:
             scan_target = html.unescape(body_html).replace("\\/", "/")
             raw_cdn_imgs = re.findall(
@@ -997,8 +995,8 @@ def extract_blog_text_and_photos(raw_url):
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
 
-    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 사진이 5장 미만만 잡혔을 때 r.jina.ai 렌더링 결과에서 본문 구간의 모든 업로드 이미지 전수 수집
-    if len(body_res.strip()) < 80 or (is_naver_blog and len(saved_images_bytes) < 5):
+    # 경로 B: 직통 HTML이 차단되어 본문 또는 사진이 0장일 때만 r.jina.ai 백업 실행
+    if len(body_res.strip()) < 80 or len(saved_images_bytes) == 0:
         try:
             md_text = fetch_via_jina_reader(url)
             if md_text and len(md_text.strip()) >= 80:
@@ -1008,7 +1006,6 @@ def extract_blog_text_and_photos(raw_url):
                         page_title = title_m.group(1).strip()
 
                 md_body = md_text.split("Markdown Content:", 1)[1] if "Markdown Content:" in md_text else md_text
-                # 하단의 '이 블로그의 다른 글 / 공감 / 댓글' 섹션 이전까지만 본문으로 제한
                 md_cut = re.split(r'\n(?:#+\s*이 블로그의 다른 글|이 블로그\s*카테고리\s*글|공감\s*\d+\s*댓글)', md_body)[0]
 
                 def replace_md_img(m):
