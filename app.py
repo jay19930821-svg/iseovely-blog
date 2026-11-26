@@ -807,7 +807,7 @@ def fetch_fashion_blogs_top20():
     return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """직통 HTML + r.jina.ai 마크다운 전수 스캔으로 본문과 고화질 사진(최대 10장) 100% 확보"""
+    """직통 HTML + r.jina.ai 마크다운 병행 추출로 본문과 고화질 사진(최대 10장) 100% 확보"""
     url = normalize_target_url(raw_url)
     final_url, page_html = fetch_html_smart(url)
 
@@ -816,7 +816,7 @@ def extract_blog_text_and_photos(raw_url):
         "profile", "blank", "emoticon", "sticker", "map", "static.naver",
         "blogpfthumb", "ogq", "gfmarket", "storep", "transparent",
         "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg",
-        "se-sticker", "link_thumb", "oglink", "dthumb-phinf"
+        "se-sticker", "link_thumb", "oglink"
     ]
     saved_images_bytes = []
     ai_thumbs = []
@@ -855,7 +855,7 @@ def extract_blog_text_and_photos(raw_url):
         return None
 
     def download_and_save_single_img(raw_img_url):
-        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"').rstrip(")")
+        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"')
         if u_clean.startswith("//"):
             u_clean = "https:" + u_clean
         elif u_clean.startswith("/"):
@@ -912,8 +912,9 @@ def extract_blog_text_and_photos(raw_url):
         body_html = ""
         se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
         if se_start:
-            # 네이버 블로그 본문 중간 절단 방지: se-main-container 이후 전체에서 본문 및 이미지 추출
-            body_html = page_html[se_start.end():]
+            sub_html = page_html[se_start.end():]
+            end_m = re.search(r'(?:<!--\s*//\s*SE_DOC_HEADER_END|<div[^>]+class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area))', sub_html, re.IGNORECASE)
+            body_html = sub_html[:end_m.start()] if end_m else sub_html
         else:
             for pattern in [
                 r'id=["\']realArtcContents["\'][^>]*>(.*?)</div>\s*<!--',
@@ -957,11 +958,10 @@ def extract_blog_text_and_photos(raw_url):
 
         html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
-        # 전체 원본 HTML(script/JSON 포함)에서 네이버/네이트 고화질 CDN 이미지 주소 전수 스캔 (최대 10장)
         if len(saved_images_bytes) < 10:
-            scan_target = html.unescape(page_html).replace("\\/", "/")
+            scan_target = html.unescape(body_html if se_start else page_html)
             raw_cdn_imgs = re.findall(
-                r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\)]+|(?:https?:)?//[^"\'\s<>\\)]*nateimg\.co\.kr/[^"\'\s<>\\)]+',
+                r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|(?:https?:)?//[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
                 scan_target,
                 re.IGNORECASE,
             )
@@ -984,8 +984,8 @@ def extract_blog_text_and_photos(raw_url):
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
 
-    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 사진이 3장 이하만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 전수 수집
-    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) <= 3):
+    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 지연 로딩으로 사진이 1장 이하만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 추가 수집
+    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) <= 1):
         try:
             md_text = fetch_via_jina_reader(url)
             if md_text and len(md_text.strip()) >= 80:
@@ -1002,14 +1002,6 @@ def extract_blog_text_and_photos(raw_url):
                     return f"\n{mk}\n" if mk else "\n"
 
                 md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_body)
-
-                # 마크다운에 남은 pstatic.net 이미지 URL까지 끝까지 스캔하여 최대 10장 채우기
-                if len(saved_images_bytes) < 10:
-                    for extra_u in re.findall(r'https?://(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^\s\)"\'<>]+', md_body):
-                        download_and_save_single_img(extra_u)
-                        if len(saved_images_bytes) >= 10:
-                            break
-
                 if len(body_res.strip()) < 80:
                     md_clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", md_with_markers)
                     lines = [ln.strip() for ln in md_clean.splitlines() if ln.strip() and not ln.strip().startswith(("URL Source:", "Published Time:"))]
@@ -1024,76 +1016,6 @@ def extract_blog_text_and_photos(raw_url):
         raise ValueError("해당 기사/블로그 원문을 읽어오지 못했습니다.")
 
     return page_title, body_res, saved_images_bytes, ai_thumbs
-
-def fetch_clean_nate_photos_for_blog(blog_title, blog_body):
-    """블로그 글의 워터마크 사진 대비용: 구글 뉴스 RSS로 한국 연예 보도기사 원문을 찾아 고화질 원본 사진(최대 10장) 추출"""
-    combined_src = f"{blog_title} {blog_body[:250]}"
-    clean_t = re.sub(r"\[[^\]]*\]|\([^\)]*\)|\[사진\s*\d+\]", " ", combined_src)
-    clean_t = re.sub(r"[^\w\s가-힣]", " ", clean_t)
-    stop_words = {
-        "패션", "코디", "착장", "정보", "브랜드", "가격", "어디꺼", "스타일", "룩",
-        "모음", "총정리", "추천", "블로그", "네이버", "요즘", "화제", "인스타", "사복",
-        "공항패션", "제작발표회", "출국", "입국", "근황", "일상", "데일리룩", "아이템", "포토"
-    }
-    tokens = []
-    for w in clean_t.split():
-        if len(w) >= 2 and w not in stop_words and w not in tokens:
-            tokens.append(w)
-
-    search_queries = []
-    if len(tokens) >= 2:
-        search_queries.append(f"{tokens[0]} {tokens[1]} 패션")
-        search_queries.append(f"{tokens[0]} {tokens[1]}")
-    elif tokens:
-        search_queries.append(f"{tokens[0]} 패션")
-
-    article_urls = []
-    seen_u = set()
-
-    for q in search_queries:
-        if len(article_urls) >= 4:
-            break
-        rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}&hl=ko&gl=KR&ceid=KR:ko"
-        try:
-            req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                xml_bytes = resp.read()
-            root = ET.fromstring(xml_bytes)
-            for item in root.findall(".//item"):
-                link_el = item.find("link")
-                if link_el is None or not link_el.text:
-                    continue
-                real_u = decode_google_news_url(link_el.text.strip())
-                if "news.google.com" in real_u or "blog.naver.com" in real_u or "youtube.com" in real_u:
-                    continue
-                if real_u not in seen_u:
-                    seen_u.add(real_u)
-                    article_urls.append(real_u)
-                    if len(article_urls) >= 4:
-                        break
-        except Exception:
-            continue
-
-    clean_images = []
-    clean_thumbs = []
-    matched_sources = []
-
-    for art_u in article_urls:
-        if len(clean_images) >= 10:
-            break
-        try:
-            art_title, _, imgs, thumbs = extract_blog_text_and_photos(art_u)
-            if imgs:
-                matched_sources.append(art_title[:30])
-                for im_b, th_im in zip(imgs, thumbs):
-                    if len(clean_images) >= 10:
-                        break
-                    clean_images.append(im_b)
-                    clean_thumbs.append(th_im)
-        except Exception:
-            continue
-
-    return clean_images, clean_thumbs, matched_sources
 
 def generate_with_gemini(contents, sys_prompt):
     err_logs = []
@@ -1303,14 +1225,6 @@ with left_col:
                             if len(o_body.strip()) < 50:
                                 raise ValueError("해당 URL에서 본문을 읽어오지 못했습니다. 주소가 올바른지 확인해 주세요.")
 
-                            # 탭 1(패션 모드)에서 블로그 URL 입력 시: 블로그 사진 최대 10장은 그대로 유지 + 워터마크 대비용 원본 기사 사진 별도 수집
-                            article_imgs_list = []
-                            matched_srcs = []
-                            if not is_issue and "blog.naver.com" in normalize_target_url(target_u):
-                                article_imgs_list, _, matched_srcs = fetch_clean_nate_photos_for_blog(p_title, o_body)
-                                if matched_srcs:
-                                    o_body = f"[참고용 원본 보도기사 출처: {', '.join(matched_srcs)}]\n\n" + o_body
-
                             img_cnt = len(img_bytes_list)
                             mode_inst = (
                                 "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
@@ -1354,8 +1268,7 @@ with left_col:
                             plain_clean = strip_all_markers(body_clean)
                             c_len = len(re.sub(r"\s+", "", plain_clean))
                             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                            art_badge = f" + 기사원본 {len(article_imgs_list)}장" if article_imgs_list else ""
-                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:22]} [추출사진 {img_cnt}장{art_badge} · 공백제외 {c_len}자]"
+                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
                             st.session_state[mode_archive_key].insert(0, {
                                 "id": ts_str,
@@ -1366,8 +1279,6 @@ with left_col:
                                 "plain": plain_clean,
                                 "tags": tags_clean,
                                 "images": img_bytes_list,
-                                "article_images": article_imgs_list,
-                                "matched_sources": matched_srcs,
                                 "char_count": c_len,
                             })
                             st.session_state[mode_sel_key] = 0
@@ -1466,8 +1377,6 @@ with left_col:
                             "plain": plain_clean,
                             "tags": tags_clean,
                             "images": food_img_bytes,
-                            "article_images": [],
-                            "matched_sources": [],
                             "char_count": c_len,
                         })
                         st.session_state[mode_sel_key] = 0
@@ -1507,11 +1416,8 @@ with left_col:
         cur_item = st.session_state[mode_archive_key][sel_idx]
         item_uid = cur_item["id"]
 
-        # 크롤링 및 가공된 사진 바로 보기 갤러리 (1. 본문 추출 사진 / 2. 원본 기사 보도사진 구분 표시)
-        art_imgs = cur_item.get("article_images", [])
-        matched_srcs = cur_item.get("matched_sources", [])
-
-        st.markdown(f"**🖼️ 1. 추출 및 보정 완료된 본문 사진 ({len(cur_item['images'])}장)**")
+        # 크롤링 및 가공된 사진 바로 보기 갤러리
+        st.markdown(f"**🖼️ 크롤링 및 보정 완료된 고화질 사진 ({len(cur_item['images'])}장)**")
         if cur_item["images"]:
             with st.container(border=True):
                 cols_per_row = 5
@@ -1520,24 +1426,9 @@ with left_col:
                     g_cols = st.columns(cols_per_row)
                     for col_i, img_b in enumerate(row_imgs):
                         pic_num = row_start + col_i + 1
-                        g_cols[col_i].image(img_b, caption=f"[본문사진 {pic_num}]", use_container_width=True)
+                        g_cols[col_i].image(img_b, caption=f"[사진 {pic_num}]", use_container_width=True)
         else:
             st.caption("※ 이 기사/링크에서는 추출 가능한 본문 이미지가 없었습니다.")
-
-        if cur_mode == "fashion":
-            src_info = f" (참고 기사: {', '.join(matched_srcs)})" if matched_srcs else ""
-            st.markdown(f"**📰 2. 워터마크 대비용 · 자동 탐색된 원본 기사 보도사진 ({len(art_imgs)}장)**{src_info}")
-            if art_imgs:
-                with st.container(border=True):
-                    cols_per_row = 5
-                    for row_start in range(0, len(art_imgs), cols_per_row):
-                        row_imgs = art_imgs[row_start:row_start + cols_per_row]
-                        g_cols = st.columns(cols_per_row)
-                        for col_i, img_b in enumerate(row_imgs):
-                            pic_num = row_start + col_i + 1
-                            g_cols[col_i].image(img_b, caption=f"[원본기사 {pic_num}]", use_container_width=True)
-            else:
-                st.caption("※ 개인 인스타 사복 등 매칭되는 언론사 보도기사 사진이 없는 주제입니다.")
 
         st.markdown(f"**3. 완성된 원고 본문 (공백 제외 {cur_item['char_count']}자 · 3색 파스텔 음영 & 컬러/인용구 적용)**")
 
@@ -1550,16 +1441,13 @@ with left_col:
                 key_id=f"copy_rich_{item_uid}"
             )
         with act_c2:
-            total_zip_cnt = len(cur_item["images"]) + len(art_imgs)
-            if total_zip_cnt > 0:
+            if cur_item["images"]:
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
                     for img_i, img_b in enumerate(cur_item["images"], start=1):
-                        zf.writestr(f"1_본문추출사진_{img_i}.jpg", img_b)
-                    for art_i, art_b in enumerate(art_imgs, start=1):
-                        zf.writestr(f"2_원본기사사진_{art_i}.jpg", art_b)
+                        zf.writestr(f"사진_{img_i}.jpg", img_b)
                 st.download_button(
-                    label=f"📦 사진 전체 {total_zip_cnt}장 구분 ZIP 다운로드 (본문 {len(cur_item['images'])} + 기사원본 {len(art_imgs)})",
+                    label=f"📦 가공된 사진 {len(cur_item['images'])}장 ZIP 다운로드",
                     data=zip_buf.getvalue(),
                     file_name=f"이서블리_{cur_mode}_{sel_idx+1}.zip",
                     mime="application/zip",
