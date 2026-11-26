@@ -807,8 +807,9 @@ def fetch_fashion_blogs_top20():
     return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """직통 HTML + r.jina.ai 마크다운 전수 스캔으로 본문과 고화질 사진(최대 10장) 100% 확보"""
+    """네이버 블로그 본문 전용 고화질 사진(최대 10장) 정밀 추출 (광고·쇼핑·추천글 썸네일 완벽 차단)"""
     url = normalize_target_url(raw_url)
+    is_naver_blog = ("blog.naver.com" in url)
     final_url, page_html = fetch_html_smart(url)
 
     bad_words = [
@@ -816,12 +817,26 @@ def extract_blog_text_and_photos(raw_url):
         "profile", "blank", "emoticon", "sticker", "map", "static.naver",
         "blogpfthumb", "ogq", "gfmarket", "storep", "transparent",
         "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg",
-        "se-sticker", "link_thumb", "oglink", "dthumb-phinf"
+        "se-sticker", "link_thumb", "oglink", "dthumb-phinf", "shopping", "adpost"
     ]
     saved_images_bytes = []
     ai_thumbs = []
     url_to_photo_tag = {}
     tried_urls = set()
+
+    def is_valid_naver_post_photo(u_str):
+        """네이버 블로그 본문 실제 업로드 이미지인지 판별 (광고/쇼핑/프로필/외부배너 차단)"""
+        low = u_str.lower()
+        if any(b in low for b in bad_words):
+            return False
+        if not is_naver_blog:
+            return True
+        # 네이버 블로그 본문 사진은 pstatic.net의 postfiles/blogfiles/mblogthumb-phinf 중 실제 포스팅 경로만 허용
+        if any(host in low for host in ("postfiles.pstatic.net", "blogfiles.pstatic.net", "mblogthumb-phinf.pstatic.net")):
+            # 블로그 포스팅 본문 이미지 경로는 /MjAy... (날짜 base64) 또는 /202... 형태를 가짐
+            if re.search(r"/(?:MjAy|202\d)", u_str):
+                return True
+        return False
 
     def try_fetch_image_bytes(target_img_url):
         candidates = [target_img_url]
@@ -860,7 +875,7 @@ def extract_blog_text_and_photos(raw_url):
             u_clean = "https:" + u_clean
         elif u_clean.startswith("/"):
             u_clean = urllib.parse.urljoin(final_url, u_clean)
-        if not u_clean.startswith("http") or any(b in u_clean.lower() for b in bad_words):
+        if not u_clean.startswith("http") or not is_valid_naver_post_photo(u_clean):
             return None
 
         path_only = urllib.parse.urlparse(u_clean).path
@@ -876,7 +891,7 @@ def extract_blog_text_and_photos(raw_url):
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
-                if im.size[0] < 200 or im.size[1] < 160:
+                if im.size[0] < 220 or im.size[1] < 180:
                     return None
                 edited_im = process_unique_image(im, apply_crop=True)
                 buf = io.BytesIO()
@@ -906,16 +921,13 @@ def extract_blog_text_and_photos(raw_url):
             if t_m:
                 page_title = html.unescape(t_m.group(1)).strip()
 
-        og_img_m = re.search(r'(?:property|name)=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
-        og_img_url = html.unescape(og_img_m.group(1)).strip() if og_img_m else ""
-
         body_html = ""
-        se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
+        se_start = re.search(r'class=["\'][^"\']*se-main-container[^"\']*["\']', page_html, re.IGNORECASE)
         if se_start:
-            sub_html = page_html[se_start.end():]
-            # 하단 '이 블로그의 다른 글 / 추천글' 영역 직전까지만 잘라 엉뚱한 썸네일 혼입 차단
+            sub_html = page_html[se_start.start():]
+            # 하단 추천글/다른글 영역 직전까지만 본문으로 제한
             end_m = re.search(
-                r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|<div[^>]+class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area|blog_author))',
+                r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area|blog_author))',
                 sub_html,
                 re.IGNORECASE
             )
@@ -963,7 +975,7 @@ def extract_blog_text_and_photos(raw_url):
 
         html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
-        # 본문 영역(body_html) 내부의 네이버/네이트 고화질 CDN 이미지 주소 전수 스캔 (최대 10장)
+        # 본문 영역 내부의 실제 업로드 이미지 경로 전수 스캔 (최대 10장)
         if len(saved_images_bytes) < 10:
             scan_target = html.unescape(body_html).replace("\\/", "/")
             raw_cdn_imgs = re.findall(
@@ -981,17 +993,12 @@ def extract_blog_text_and_photos(raw_url):
             if extra_markers:
                 html_with_markers += "\n" + "\n".join(extra_markers)
 
-        if len(saved_images_bytes) == 0 and og_img_url:
-            mk = download_and_save_single_img(og_img_url)
-            if mk:
-                html_with_markers = f"{mk}\n" + html_with_markers
-
         text_only = re.sub(r"<[^>]+>", "\n", html_with_markers)
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
 
-    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 지연 로딩으로 사진이 5장 미만만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 전수 수집
-    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) < 5):
+    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 사진이 5장 미만만 잡혔을 때 r.jina.ai 렌더링 결과에서 본문 구간의 모든 업로드 이미지 전수 수집
+    if len(body_res.strip()) < 80 or (is_naver_blog and len(saved_images_bytes) < 5):
         try:
             md_text = fetch_via_jina_reader(url)
             if md_text and len(md_text.strip()) >= 80:
@@ -1001,7 +1008,7 @@ def extract_blog_text_and_photos(raw_url):
                         page_title = title_m.group(1).strip()
 
                 md_body = md_text.split("Markdown Content:", 1)[1] if "Markdown Content:" in md_text else md_text
-                # 마크다운 하단의 '이 블로그의 다른 글 / 공감 / 댓글' 섹션 이전까지만 스캔
+                # 하단의 '이 블로그의 다른 글 / 공감 / 댓글' 섹션 이전까지만 본문으로 제한
                 md_cut = re.split(r'\n(?:#+\s*이 블로그의 다른 글|이 블로그\s*카테고리\s*글|공감\s*\d+\s*댓글)', md_body)[0]
 
                 def replace_md_img(m):
@@ -1012,7 +1019,7 @@ def extract_blog_text_and_photos(raw_url):
                 md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_cut)
 
                 if len(saved_images_bytes) < 10:
-                    for extra_u in re.findall(r'https?://(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^\s\)"\'<>]+', md_cut):
+                    for extra_u in re.findall(r'https?://(?:postfiles|blogfiles|mblogthumb-phinf)\.pstatic\.net/[^\s\)"\'<>]+', md_cut):
                         download_and_save_single_img(extra_u)
                         if len(saved_images_bytes) >= 10:
                             break
