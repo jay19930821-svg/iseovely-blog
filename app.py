@@ -715,30 +715,54 @@ def fetch_nate_ent_top20():
     return results[:20]
 
 def fetch_fashion_blogs_top20():
-    """탭 1 전용: 연예인 패션 인기 블로그 글 1~20위 수집기"""
+    """탭 1 전용: 구글 암호화 링크 없이 네이버 연예인 패션 인기 블로그 직통 URL(m.blog.naver.com) 1~20위 수집"""
     results = []
+    seen_urls = set()
     seen_titles = set()
-    q_blog = 'site:blog.naver.com "연예인" ("패션" OR "공항패션" OR "사복패션" OR "착장")'
-    rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(q_blog)}&hl=ko&gl=KR&ceid=KR:ko"
-    try:
-        req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            root_xml = ET.fromstring(resp.read())
-        for item in root_xml.findall(".//item")[:22]:
-            t_el, l_el, d_el = item.find("title"), item.find("link"), item.find("description")
-            if t_el is not None and l_el is not None and t_el.text and l_el.text:
-                clean_t = html.unescape(t_el.text).strip()
-                raw_link = l_el.text.strip()
-                if d_el is not None and d_el.text:
-                    desc_unesc = html.unescape(d_el.text)
-                    real_href = re.search(r'href=["\'](https?://(?!(?:news\.google|www\.google))[^"\']+)["\']', desc_unesc)
-                    if real_href:
-                        raw_link = real_href.group(1)
-                if clean_t not in seen_titles and len(results) < 20:
-                    seen_titles.add(clean_t)
-                    results.append({"source": "패션블로그", "title": clean_t, "url": raw_link})
-    except Exception:
-        pass
+
+    queries = [
+        "연예인 공항패션 착장",
+        "연예인 사복패션 브랜드",
+        "드라마 제작발표회 패션",
+    ]
+
+    for q in queries:
+        if len(results) >= 20:
+            break
+        search_u = f"https://search.naver.com/search.naver?ssc=tab.blog.all&sm=tab_jum&query={urllib.parse.quote(q)}"
+        _, h_str = fetch_html_smart(search_u, referer="https://www.naver.com/")
+        if not h_str:
+            try:
+                md_txt = fetch_via_jina_reader(search_u)
+                for raw_t, href in re.findall(r'\[([^\]]{8,120})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+)\)', md_txt):
+                    clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
+                    title_txt = re.sub(r"!\[.*?\]\(.*?\)", "", raw_t).strip()
+                    if clean_u not in seen_urls and len(title_txt) >= 8 and title_txt not in seen_titles:
+                        seen_urls.add(clean_u)
+                        seen_titles.add(title_txt)
+                        results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
+                        if len(results) >= 20:
+                            break
+            except Exception:
+                pass
+            continue
+
+        for href, inner_html in re.findall(
+            r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
+            h_str,
+            re.DOTALL | re.IGNORECASE
+        ):
+            clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
+            if clean_u in seen_urls:
+                continue
+            title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", inner_html))).strip()
+            if len(title_txt) >= 10 and title_txt not in seen_titles:
+                seen_urls.add(clean_u)
+                seen_titles.add(title_txt)
+                results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
+                if len(results) >= 20:
+                    break
+
     return results[:20]
 
 def extract_blog_text_and_photos(raw_url):
