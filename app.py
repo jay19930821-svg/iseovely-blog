@@ -766,11 +766,17 @@ def fetch_fashion_blogs_top20():
     return results[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """직통 HTML + r.jina.ai 마크다운 병행 추출로 본문과 고화질 보도사진 100% 확보"""
+    """직통 HTML + r.jina.ai 마크다운 병행 추출로 본문과 고화질 사진(최대 10장) 100% 확보"""
     url = normalize_target_url(raw_url)
     final_url, page_html = fetch_html_smart(url)
 
-    bad_words = ["logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar", "profile", "blank", "emoticon", "sticker", "map", "static.naver", "blogpfthumb", "ogq", "gfmarket", "storep", "transparent", "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg"]
+    bad_words = [
+        "logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar",
+        "profile", "blank", "emoticon", "sticker", "map", "static.naver",
+        "blogpfthumb", "ogq", "gfmarket", "storep", "transparent",
+        "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg",
+        "se-sticker", "link_thumb", "oglink"
+    ]
     saved_images_bytes = []
     ai_thumbs = []
     url_to_photo_tag = {}
@@ -786,9 +792,11 @@ def extract_blog_text_and_photos(raw_url):
                 orig_part = "https://" + orig_part
             candidates.insert(0, orig_part)
 
-        base_u = target_img_url.split("?")[0]
+        # 네이버 블로그 썸네일 프록시(mblogthumb-phinf)를 고화질 원본(postfiles)으로 함께 시도
+        norm_u = target_img_url.replace("mblogthumb-phinf.pstatic.net", "postfiles.pstatic.net")
+        base_u = norm_u.split("?")[0]
         if "postfiles.pstatic.net" in base_u or "blogfiles.pstatic.net" in base_u:
-            candidates = [base_u + "?type=w966", base_u, target_img_url]
+            candidates = [base_u + "?type=w966", base_u + "?type=w800", base_u, target_img_url]
 
         dl_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -800,14 +808,14 @@ def extract_blog_text_and_photos(raw_url):
                 img_req = urllib.request.Request(cand_u, headers=dl_headers)
                 with urllib.request.urlopen(img_req, timeout=8) as img_resp:
                     data = img_resp.read()
-                if len(data) >= 3500:
+                if len(data) >= 4000:
                     return data
             except Exception:
                 continue
         return None
 
     def download_and_save_single_img(raw_img_url):
-        u_clean = html.unescape(raw_img_url).strip()
+        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"')
         if u_clean.startswith("//"):
             u_clean = "https:" + u_clean
         elif u_clean.startswith("/"):
@@ -815,7 +823,9 @@ def extract_blog_text_and_photos(raw_url):
         if not u_clean.startswith("http") or any(b in u_clean.lower() for b in bad_words):
             return None
 
-        base_key = u_clean.split("?")[0] if ("pstatic.net" in u_clean or "nateimg.co.kr" in u_clean) else u_clean
+        # 동일 이미지 중복 방지 (경로 기준 키 통일)
+        path_only = urllib.parse.urlparse(u_clean).path
+        base_key = path_only if ("pstatic.net" in u_clean or "nateimg.co.kr" in u_clean) else u_clean.split("?")[0]
         if base_key in url_to_photo_tag:
             return url_to_photo_tag[base_key]
         if base_key in tried_urls or len(saved_images_bytes) >= 10:
@@ -827,8 +837,9 @@ def extract_blog_text_and_photos(raw_url):
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
-                if im.size[0] < 180 or im.size[1] < 150:
+                if im.size[0] < 200 or im.size[1] < 160:
                     return None
+                # 기존 설정 유지: 1% 크롭 + 밝기/대비/선명도 미세 보정 + 화이트 여백
                 edited_im = process_unique_image(im, apply_crop=True)
                 buf = io.BytesIO()
                 edited_im.save(buf, format="JPEG", quality=98, subsampling=0)
@@ -844,14 +855,18 @@ def extract_blog_text_and_photos(raw_url):
         except Exception:
             return None
 
-    # 경로 A: 직통 HTML 파싱 성공 시
+    page_title = "연예인 패션·이슈 기사"
+    body_res = ""
+
+    # 경로 A: 직통 HTML 파싱
     if page_html:
         og_title = re.search(r'(?:property|name)=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
         if og_title:
             page_title = html.unescape(og_title.group(1)).strip()
         else:
             t_m = re.search(r"<title>(.*?)</title>", page_html, re.IGNORECASE | re.DOTALL)
-            page_title = html.unescape(t_m.group(1)).strip() if t_m else "네이트 연예 기사"
+            if t_m:
+                page_title = html.unescape(t_m.group(1)).strip()
 
         og_img_m = re.search(r'(?:property|name)=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
         og_img_url = html.unescape(og_img_m.group(1)).strip() if og_img_m else ""
@@ -861,7 +876,8 @@ def extract_blog_text_and_photos(raw_url):
         if se_start:
             sub_html = page_html[se_start.end():]
             end_m = re.search(r'(?:<!--\s*//\s*SE_DOC_HEADER_END|<div[^>]+class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area))', sub_html, re.IGNORECASE)
-            body_html = sub_html[:end_m.start()] if end_m else sub_html[:150000]
+            # 150KB 글자 절단 해제 (9~10장 긴 포스팅 전체 포함)
+            body_html = sub_html[:end_m.start()] if end_m else sub_html
         else:
             for pattern in [
                 r'id=["\']realArtcContents["\'][^>]*>(.*?)</div>\s*<!--',
@@ -905,10 +921,12 @@ def extract_blog_text_and_photos(raw_url):
 
         html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
+        # 전체 페이지에서 네이버/네이트 고화질 CDN 이미지 주소 전수 스캔 (최대 10장까지 보충)
         if len(saved_images_bytes) < 10:
+            scan_target = html.unescape(body_html if se_start else page_html)
             raw_cdn_imgs = re.findall(
                 r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|(?:https?:)?//[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
-                html.unescape(clean_html),
+                scan_target,
                 re.IGNORECASE,
             )
             extra_markers = []
@@ -929,34 +947,40 @@ def extract_blog_text_and_photos(raw_url):
         text_only = re.sub(r"<[^>]+>", "\n", html_with_markers)
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
-        if len(body_res.strip()) >= 80:
-            return page_title, body_res, saved_images_bytes, ai_thumbs
 
-    # 경로 B: 해외 IP 차단 시 r.jina.ai 리더 마크다운(기사 제목 + 본문 + 고화질 이미지 URL) 파싱
-    md_text = fetch_via_jina_reader(url)
-    if not md_text or len(md_text.strip()) < 80:
+    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 지연 로딩으로 사진이 1장 이하만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 추가 수집
+    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) <= 1):
+        try:
+            md_text = fetch_via_jina_reader(url)
+            if md_text and len(md_text.strip()) >= 80:
+                if page_title == "연예인 패션·이슈 기사":
+                    title_m = re.search(r"^Title:\s*(.+)$", md_text, re.MULTILINE)
+                    if title_m:
+                        page_title = title_m.group(1).strip()
+
+                md_body = md_text.split("Markdown Content:", 1)[1] if "Markdown Content:" in md_text else md_text
+
+                def replace_md_img(m):
+                    img_u = m.group(1).strip()
+                    mk = download_and_save_single_img(img_u)
+                    return f"\n{mk}\n" if mk else "\n"
+
+                md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_body)
+                if len(body_res.strip()) < 80:
+                    md_clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", md_with_markers)
+                    lines = [ln.strip() for ln in md_clean.splitlines() if ln.strip() and not ln.strip().startswith(("URL Source:", "Published Time:"))]
+                    body_res = "\n".join(lines)[:12000]
+                elif saved_images_bytes:
+                    # 기존 본문 끝에 새로 확보된 [사진 N] 번호 안내 보강
+                    all_markers = "\n".join([f"[사진 {i}]" for i in range(1, len(saved_images_bytes) + 1)])
+                    body_res = f"{all_markers}\n" + body_res
+        except Exception:
+            pass
+
+    if len(body_res.strip()) < 50:
         raise ValueError("해당 기사/블로그 원문을 읽어오지 못했습니다.")
 
-    title_m = re.search(r"^Title:\s*(.+)$", md_text, re.MULTILINE)
-    page_title = title_m.group(1).strip() if title_m else "네이트 연예 기사"
-
-    # Markdown Content: 이후 본문 영역만 발췌
-    if "Markdown Content:" in md_text:
-        md_body = md_text.split("Markdown Content:", 1)[1]
-    else:
-        md_body = md_text
-
-    # 본문 내 마크다운 이미지 ![alt](https://...) 추출 및 [사진 N] 치환
-    def replace_md_img(m):
-        img_u = m.group(1).strip()
-        mk = download_and_save_single_img(img_u)
-        return f"\n{mk}\n" if mk else "\n"
-
-    md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_body)
-    # 일반 텍스트 링크 제거 ([텍스트](url) -> 텍스트)
-    md_clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", md_with_markers)
-    lines = [ln.strip() for ln in md_clean.splitlines() if ln.strip() and not ln.strip().startswith(("URL Source:", "Published Time:"))]
-    return page_title, "\n".join(lines)[:12000], saved_images_bytes, ai_thumbs
+    return page_title, body_res, saved_images_bytes, ai_thumbs
 
 def generate_with_gemini(contents, sys_prompt):
     err_logs = []
