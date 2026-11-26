@@ -9,6 +9,8 @@ import io
 import json
 import zipfile
 import time
+import base64
+import http.cookiejar
 from datetime import datetime
 from PIL import Image, ImageEnhance, ImageOps
 from google import genai
@@ -524,8 +526,67 @@ def process_unique_image(pil_img, apply_crop=True):
     border_bottom = max(14, int(ch * 0.02))
     return ImageOps.expand(processed, border=(border_side, border_side, border_side, border_bottom), fill=(255, 255, 255))
 
+def decode_google_news_url(source_url):
+    if "news.google.com" not in source_url:
+        return source_url
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    opener.addheaders = [
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+        ("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8"),
+    ]
+
+    try:
+        path_part = urllib.parse.urlparse(source_url).path.split("/")[-1]
+        padded = path_part + "=" * (-len(path_part) % 4)
+        decoded_bytes = base64.urlsafe_b64decode(padded)
+        url_match = re.search(rb"https?://[^\x00-\x1f\x7f\"'<>]+", decoded_bytes)
+        if url_match:
+            cand = url_match.group(0).decode("utf-8", errors="ignore")
+            if "news.google.com" not in cand:
+                return cand
+    except Exception:
+        pass
+
+    try:
+        article_id = urllib.parse.urlparse(source_url).path.split("/")[-1]
+        fetch_u = f"https://news.google.com/articles/{article_id}"
+        with opener.open(fetch_u, timeout=10) as resp:
+            final_u = resp.geturl()
+            if "news.google.com" not in final_u:
+                return final_u
+            html_str = resp.read().decode("utf-8", errors="ignore")
+
+        ts_m = re.search(r'data-n-a-ts=["\'](\d+)["\']', html_str)
+        sg_m = re.search(r'data-n-a-sg=["\']([^"\']+)["\']', html_str)
+        if ts_m and sg_m:
+            ts_val, sg_val = ts_m.group(1), sg_m.group(1)
+            payload_inner = (
+                f'["garturlreq",[["X","X",["X","X"],null,null,1,1,"KR:ko",null,1,null,null,null,null,null,0,1],'
+                f'"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{article_id}",{ts_val},"{sg_val}"]'
+            )
+            req_body = urllib.parse.urlencode({
+                "f.req": json.dumps([[["Fbv4je", payload_inner, None, "generic"]]])
+            }).encode("utf-8")
+
+            api_req = urllib.request.Request(
+                "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+                data=req_body,
+                headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+            )
+            with opener.open(api_req, timeout=10) as api_resp:
+                api_txt = api_resp.read().decode("utf-8", errors="ignore")
+            real_m = re.search(r'\["garturlres","(https?://[^"]+)"', api_txt)
+            if real_m:
+                return real_m.group(1).replace("\\u003d", "=").replace("\\u0026", "&")
+    except Exception:
+        pass
+
+    return source_url
+
 def normalize_target_url(raw_url):
-    u = raw_url.strip()
+    u = decode_google_news_url(raw_url.strip())
     if "blog.naver.com/" in u and "m.blog.naver.com/" not in u:
         blog_id_m = re.search(r"blogId=([^&]+)", u)
         log_no_m = re.search(r"logNo=(\d+)", u)
@@ -535,6 +596,20 @@ def normalize_target_url(raw_url):
     return u
 
 def fetch_via_jina_reader(target_url):
+    """해외 클라우드 서버에서 한국 사이트 차단을 뚫고 렌더링된 마크다운(링크+이미지 포함) 추출"""
+    if "news.google.com" in target_url:
+        raise ValueError("구글 뉴스 암호화 링크를 원본 블로그 주소로 변환하지 못했습니다. 다른 패션 블로그 항목을 선택해 주세요.")
+    jina_u = f"https://r.jina.ai/{target_url}"
+    req = urllib.request.Request(
+        jina_u,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/plain, text/markdown, */*",
+            "X-Return-Format": "markdown",
+        }
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
     """해외 클라우드 서버에서 한국 사이트 차단을 뚫고 렌더링된 마크다운(링크+이미지 포함) 추출"""
     jina_u = f"https://r.jina.ai/{target_url}"
     req = urllib.request.Request(
