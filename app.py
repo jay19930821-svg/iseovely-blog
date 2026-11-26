@@ -807,11 +807,10 @@ def fetch_fashion_blogs_top20():
     return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """네이버 블로그 PostView 직통 파싱 + r.jina.ai 백업으로 본문 실제 사진(최대 10장) 100% 추출"""
+    """네이버 블로그 단독/묶음/슬라이드 이미지 전수 추출 + r.jina.ai 백업으로 고화질 사진(최대 10장) 100% 확보"""
     url = normalize_target_url(raw_url)
     is_naver_blog = ("blog.naver.com" in url)
 
-    # 네이버 블로그는 PostView.naver 직통 주소로 접근해야 해외 서버에서도 본문(se-main-container)과 지연로딩 이미지가 100% 열림
     fetch_target = url
     if is_naver_blog:
         m_post = re.search(r"blog\.naver\.com/([a-zA-Z0-9_-]+)/(\d+)", url)
@@ -910,7 +909,7 @@ def extract_blog_text_and_photos(raw_url):
     page_title = "연예인 패션·이슈 기사"
     body_res = ""
 
-    # 경로 A: 직통 HTML 파싱 (네이버 블로그 PostView 본문 컨테이너 정밀 타겟팅)
+    # 경로 A: 직통 HTML 파싱
     if page_html:
         og_title = re.search(r'(?:property|name)=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
         if og_title:
@@ -924,8 +923,9 @@ def extract_blog_text_and_photos(raw_url):
         se_start = re.search(r'class=["\'][^"\']*se-main-container[^"\']*["\']', page_html, re.IGNORECASE)
         if se_start:
             sub_html = page_html[se_start.start():]
+            # 본문 소제목이 중간에 잘리지 않도록 실제 포스트 하단 댓글·공감·태그 영역만 정확히 차단
             end_m = re.search(
-                r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area|blog_author))',
+                r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|id=["\'](?:post-bottom|commentArea|tagList)["\']|class=["\'][^"\']*(?:post_tag|btn_like_area|post_writer|another_category|recommend_post|comment_area))',
                 sub_html,
                 re.IGNORECASE
             )
@@ -949,6 +949,7 @@ def extract_blog_text_and_photos(raw_url):
         clean_html = re.sub(r"<script.*?>.*?</script>", "", body_html, flags=re.DOTALL)
         clean_html = re.sub(r"<style.*?>.*?</style>", "", clean_html, flags=re.DOTALL)
 
+        # 묶음/슬라이드 이미지 컨테이너(div)가 안쪽 img/a 태그를 가리지 않도록 img와 a 태그만 정밀 스캔
         def replace_media_tag(match):
             tag_str = match.group(0)
             if "oglink" in tag_str.lower() or "profile" in tag_str.lower() or "link_thumb" in tag_str.lower():
@@ -971,7 +972,7 @@ def extract_blog_text_and_photos(raw_url):
             marker = download_and_save_single_img(candidate_src)
             return f"\n{marker}\n" if marker else "\n"
 
-        html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
+        html_with_markers = re.sub(r"<(?:img|a)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
         # 본문(body_html) 내부에서 아직 안 잡힌 pstatic.net / nateimg.co.kr 이미지 경로 전수 보충
         if len(saved_images_bytes) < 10:
@@ -995,8 +996,8 @@ def extract_blog_text_and_photos(raw_url):
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
 
-    # 경로 B: 직통 HTML이 차단되어 본문 또는 사진이 0장일 때만 r.jina.ai 백업 실행
-    if len(body_res.strip()) < 80 or len(saved_images_bytes) == 0:
+    # 경로 B: 직통 HTML에서 본문이 짧거나, 네이버 블로그에서 사진이 3장 미만일 때 r.jina.ai 백업으로 나머지 사진 전수 보충
+    if len(body_res.strip()) < 80 or (is_naver_blog and len(saved_images_bytes) < 3):
         try:
             md_text = fetch_via_jina_reader(url)
             if md_text and len(md_text.strip()) >= 80:
