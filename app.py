@@ -715,8 +715,9 @@ def fetch_nate_ent_top20():
     return results[:20]
 
 def fetch_fashion_blogs_top20():
-    """탭 1 전용: 구글 암호화 링크 없이 네이버 연예인 패션 인기 블로그 직통 URL(m.blog.naver.com) 1~20위 수집"""
-    results = []
+    """탭 1 전용: 공감수·댓글수·인플루언서 반응이 검증된 상위 인기 패션 블로그 1~20위 필터링 수집"""
+    verified_results = []
+    fallback_results = []
     seen_urls = set()
     seen_titles = set()
 
@@ -724,46 +725,106 @@ def fetch_fashion_blogs_top20():
         "연예인 공항패션 착장",
         "연예인 사복패션 브랜드",
         "드라마 제작발표회 패션",
+        "연예인 인스타 사복 코디",
     ]
 
-    for q in queries:
-        if len(results) >= 20:
-            break
-        search_u = f"https://search.naver.com/search.naver?ssc=tab.blog.all&sm=tab_jum&query={urllib.parse.quote(q)}"
-        _, h_str = fetch_html_smart(search_u, referer="https://www.naver.com/")
-        if not h_str:
-            try:
-                md_txt = fetch_via_jina_reader(search_u)
-                for raw_t, href in re.findall(r'\[([^\]]{8,120})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+)\)', md_txt):
-                    clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
-                    title_txt = re.sub(r"!\[.*?\]\(.*?\)", "", raw_t).strip()
-                    if clean_u not in seen_urls and len(title_txt) >= 8 and title_txt not in seen_titles:
-                        seen_urls.add(clean_u)
-                        seen_titles.add(title_txt)
-                        results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
-                        if len(results) >= 20:
-                            break
-            except Exception:
-                pass
-            continue
+    fashion_keywords = ["공항패션", "사복", "패션", "착장", "코디", "브랜드", "가방", "원피스", "자켓", "화보", "제작발표회", "하객룩"]
 
-        for href, inner_html in re.findall(
-            r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
-            h_str,
-            re.DOTALL | re.IGNORECASE
-        ):
-            clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
-            if clean_u in seen_urls:
-                continue
-            title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", inner_html))).strip()
-            if len(title_txt) >= 10 and title_txt not in seen_titles:
+    for q in queries:
+        if len(verified_results) >= 20:
+            break
+        # 모바일 네이버 블로그 검색 결과는 공감수·댓글수·인플루언서 배지 정보가 구조화되어 노출됨
+        m_search_u = f"https://m.search.naver.com/search.naver?where=m_blog&sm=mtb_jum&query={urllib.parse.quote(q)}"
+        _, h_str = fetch_html_smart(m_search_u, referer="https://m.naver.com/")
+        if not h_str:
+            pc_search_u = f"https://search.naver.com/search.naver?ssc=tab.blog.all&sm=tab_jum&query={urllib.parse.quote(q)}"
+            _, h_str = fetch_html_smart(pc_search_u, referer="https://www.naver.com/")
+
+        if h_str:
+            # 검색 결과 카드(li/div 블록) 단위로 분리하여 공감수·댓글수·인플루언서 여부 검증
+            blocks = re.split(r'<li[^>]+class=["\'][^"\']*(?:bx|view_wrap|lst_total)[^"\']*["\']', h_str, flags=re.IGNORECASE)
+            if len(blocks) <= 1:
+                blocks = [h_str]
+
+            for blk in blocks:
+                link_m = re.search(
+                    r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
+                    blk,
+                    re.DOTALL | re.IGNORECASE
+                )
+                if not link_m:
+                    continue
+
+                clean_u = link_m.group(1).split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
+                if clean_u in seen_urls:
+                    continue
+
+                # 블록 내 가장 긴 제목 텍스트 추출
+                all_a_texts = [
+                    re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", t_html))).strip()
+                    for _, t_html in re.findall(r'<a[^>]+href=["\']https?://(?:m\.)?blog\.naver\.com/[^"\']+["\'][^>]*>(.*?)</a>', blk, re.DOTALL | re.IGNORECASE)
+                ]
+                title_txt = max(all_a_texts, key=len) if all_a_texts else ""
+                if len(title_txt) < 10 or title_txt in seen_titles:
+                    continue
+
+                # 상위 인기글 검증 지표 확인 (공감수, 댓글수, 인플루언서 마크)
+                like_m = re.search(r'(?:공감|좋아요)\s*(\d+)', blk)
+                cmt_m = re.search(r'댓글\s*(\d+)', blk)
+                is_influencer = bool(re.search(r'(?:in\.naver\.com|인플루언서|influencer)', blk, re.IGNORECASE))
+
+                like_cnt = int(like_m.group(1)) if like_m else 0
+                cmt_cnt = int(cmt_m.group(1)) if cmt_m else 0
+                has_fashion_kw = any(fk in title_txt for fk in fashion_keywords)
+
                 seen_urls.add(clean_u)
                 seen_titles.add(title_txt)
-                results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
-                if len(results) >= 20:
+
+                if is_influencer or like_cnt >= 3 or cmt_cnt >= 1:
+                    badge = "인플루언서" if is_influencer else f"공감 {like_cnt}" if like_cnt > 0 else f"댓글 {cmt_cnt}"
+                    verified_results.append({
+                        "source": f"상위인기·{badge}",
+                        "title": title_txt,
+                        "url": clean_u,
+                    })
+                elif has_fashion_kw and len(fallback_results) < 20:
+                    fallback_results.append({
+                        "source": "패션블로그",
+                        "title": title_txt,
+                        "url": clean_u,
+                    })
+
+                if len(verified_results) >= 20:
                     break
 
-    return results[:20]
+        # 직통 HTML 차단 시 r.jina.ai 마크다운에서 인플루언서/공감 지표 포함 항목 우선 파싱
+        if len(verified_results) < 10:
+            try:
+                md_txt = fetch_via_jina_reader(m_search_u)
+                for line in md_txt.splitlines():
+                    m_link = re.search(r'\[([^\]]{10,120})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+)\)', line)
+                    if not m_link:
+                        continue
+                    raw_t, href = m_link.group(1), m_link.group(2)
+                    clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
+                    title_txt = re.sub(r"!\[.*?\]\(.*?\)", "", raw_t).strip()
+                    if clean_u in seen_urls or len(title_txt) < 10 or title_txt in seen_titles:
+                        continue
+
+                    seen_urls.add(clean_u)
+                    seen_titles.add(title_txt)
+                    is_inf_md = ("인플루언서" in line or "in.naver.com" in line or "공감" in line)
+                    if is_inf_md:
+                        verified_results.append({"source": "상위인기블로그", "title": title_txt, "url": clean_u})
+                    elif any(fk in title_txt for fk in fashion_keywords) and len(fallback_results) < 20:
+                        fallback_results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
+                    if len(verified_results) >= 20:
+                        break
+            except Exception:
+                pass
+
+    combined = verified_results + [item for item in fallback_results if item["url"] not in {v["url"] for v in verified_results}]
+    return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
     """직통 HTML + r.jina.ai 마크다운 병행 추출로 본문과 고화질 사진(최대 10장) 100% 확보"""
