@@ -231,6 +231,23 @@ ISSUE_FORMAT_RULES = (
     "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 인물·이슈·방송 관련 검색 태그 30개를 쉼표로 구분해 출력해."
 )
 
+ISSUE_SHORT_FORMAT_RULES = (
+    "\n\n[⚡ 연예인 이슈·근황 모바일 숏폼(핵심 요약) 전용 규칙 · 600~900자 · 빠른 발행용]\n"
+    "1. [핵심만 압축한 모바일 숏폼 글자 수 (공백 제외 600~900자)]: "
+    "군더더기 배경 설명은 빼고 '무슨 일이 있었는지 핵심 팩트 + 대중 반응'만 임팩트 있게 공백 제외 600~900자 분량으로 빠르게 읽히게 작성해!\n"
+    "2. [자기소개 금지 & 맨 위 제목 2가지 추천]: "
+    "자기소개 인사말 절대 금지! 맨 첫 줄부터 아래 형식으로 제목 2가지만 먼저 제시해 줘:\n"
+    "   [제목 추천 1 - 이서블리 이슈 후킹형] (궁금증을 유발하는 핵심 한 줄 + 인물/프로그램명 + 이모지 ✨ 조합)\n"
+    "   [제목 추천 2 - 상위 5% 검색 유입형] (인물명 + 핵심 사건/방송 키워드 중심의 클릭을 부르는 제목)\n"
+    "   그 다음 줄에 '===' 를 적고 자기소개 없이 바로 핵심 내용으로 직진해.\n"
+    "3. [컴팩트한 2~3개 섹션 구성]: "
+    "① 화제 된 핵심 포인트 요약, ② 네티즌·팬 실시간 반응 & 한 줄 정리 형태로 짧고 굵게 구성해.\n"
+    "4. [첨부 사진 1~3장 정확 일치]: "
+    "첨부된 실제 사진(1~3장)을 확인하고 각 [사진 1]~[사진 N] 위아래에 실제 장면·표정과 일치하는 핵심 멘트만 짧게 써줘. (0장이면 [사진 N] 표기 생략)\n"
+    + COMMON_RICH_FORMAT_RULES +
+    "7. [맨 마지막 11pt 출처 표기 & 태그 30개]: "
+    "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 인물·이슈·방송 관련 검색 태그 30개를 쉼표로 구분해 출력해."
+)
 FOOD_FORMAT_RULES = (
     "\n\n[🍽️ 맛집 후기 자동화 모드 전용 규칙 · 실방문 생생 리뷰 · 3색 심플 음영 서식]\n"
     "1. [네이버 상위 5% 맛집 리뷰 황금 글자 수 준수 (공백 제외 1,200~1,800자)]: "
@@ -1227,30 +1244,58 @@ with left_col:
             key=f"extra_note_{cur_mode}"
         )
 
+        # 탭 2(이슈 모드) 전용: 기본 장문 vs 모바일 핵심 요약(숏폼) 선택
+        is_short_issue = False
+        if is_issue:
+            issue_len_mode = st.radio(
+                "이슈 원고 분량 & 사진 개수 선택",
+                [
+                    "📄 기본 상위 5% 모드 (공백 제외 1,500~2,000자 · 사진 최대 10장)",
+                    "⚡ 모바일 숏폼·핵심 요약 모드 (공백 제외 600~900자 · 사진 최대 3장)"
+                ],
+                horizontal=True,
+                key="radio_issue_len"
+            )
+            is_short_issue = issue_len_mode.startswith("⚡")
+
         btn_label = "🔥 [이슈 모드] 선택한 문체로 입력한 URL 일괄 변환 & 보관함 저장" if is_issue else "👗 [패션 모드] 선택한 문체로 입력한 URL 일괄 변환 & 보관함 저장"
         if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_gen_{cur_mode}"):
             urls = [u.strip() for u in url_box.splitlines() if u.strip().startswith("http")]
             if not urls:
                 st.warning("URL 입력창에 유효한 웹 주소(https://...)를 하나 이상 입력해 주세요!")
             else:
-                mode_tag = "[이슈]" if is_issue else "[패션]"
-                active_rules = ISSUE_FORMAT_RULES if is_issue else FASHION_FORMAT_RULES
+                mode_tag = ("[이슈·숏폼]" if is_short_issue else "[이슈]") if is_issue else "[패션]"
+                if is_issue:
+                    active_rules = ISSUE_SHORT_FORMAT_RULES if is_short_issue else ISSUE_FORMAT_RULES
+                else:
+                    active_rules = FASHION_FORMAT_RULES
                 sys_prompt = DEFAULT_STYLES[style_choice] + active_rules
                 generated_any = False
 
                 for idx, target_u in enumerate(urls, start=1):
-                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 상위 5% 원고 일괄 작성 중..."):
+                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 원고 일괄 작성 중..."):
                         try:
                             p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u)
                             if len(o_body.strip()) < 50:
                                 raise ValueError("해당 URL에서 본문을 읽어오지 못했습니다. 주소가 올바른지 확인해 주세요.")
 
+                            # 모바일 숏폼 이슈 모드일 때는 사진을 최대 3장까지만 사용
+                            if is_short_issue:
+                                img_bytes_list = img_bytes_list[:3]
+                                ai_thumbs = ai_thumbs[:3]
+
                             img_cnt = len(img_bytes_list)
-                            mode_inst = (
-                                "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
-                                if is_issue
-                                else "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
-                            )
+                            if is_issue and is_short_issue:
+                                len_inst = "1. 모바일에서 빠르게 읽히는 '공백 제외 600자 ~ 900자' 핵심 요약 숏폼 분량으로 군더더기 없이 작성해 줘!\n"
+                                mode_inst = "2. [연예인 이슈·숏폼 모드]: 핵심 사건 팩트와 대중 반응만 임팩트 있게 요약해 줘!\n"
+                            else:
+                                len_inst = "1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 풍성하게 작성해 줘!\n"
+                                mode_inst = (
+                                    "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
+                                    if is_issue
+                                    else "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
+                                )
+
                             photo_guide = (
                                 f"4. 첨부된 실제 사진 {img_cnt}장을 확인하고 각 [사진 N] 위아래에 실제 장면·착장과 일치하는 내용을 써줘.\n"
                                 if img_cnt > 0
@@ -1258,7 +1303,7 @@ with left_col:
                             )
                             prompt_txt = (
                                 f"[중요 지시사항]\n"
-                                f"1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 풍성하게 작성해 줘!\n"
+                                f"{len_inst}"
                                 f"{mode_inst}"
                                 f"3. 자기소개 멘트 절대 금지! 맨 위 [제목 추천 1], [제목 추천 2] 직후 바로 핵심 내용으로 시작해.\n"
                                 f"{photo_guide}"
@@ -1270,7 +1315,8 @@ with left_col:
                             prompt_txt += f"\n[원본 제목]: {p_title}\n\n[참고 원문 및 사진 순서표]:\n{o_body}"
 
                             contents = [prompt_txt]
-                            for i_idx, th in enumerate(ai_thumbs[:10], start=1):
+                            max_ai_imgs = 3 if is_short_issue else 10
+                            for i_idx, th in enumerate(ai_thumbs[:max_ai_imgs], start=1):
                                 contents.append(f"[첨부 사진 {i_idx}번]")
                                 contents.append(th)
 
@@ -1288,7 +1334,7 @@ with left_col:
                             plain_clean = strip_all_markers(body_clean)
                             c_len = len(re.sub(r"\s+", "", plain_clean))
                             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
+                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:22]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
                             st.session_state[mode_archive_key].insert(0, {
                                 "id": ts_str,
