@@ -1043,6 +1043,84 @@ def extract_blog_text_and_photos(raw_url):
 
     return page_title, body_res, saved_images_bytes, ai_thumbs
 
+def fetch_clean_nate_photos_for_blog(blog_title, blog_body):
+    """블로그 글의 워터마크 사진 대비용: 같은 주제의 깨끗한 네이트 원본 보도사진(최대 10장) 별도 탐색"""
+    combined_src = f"{blog_title} {blog_body[:250]}"
+    clean_t = re.sub(r"\[[^\]]*\]|\([^\)]*\)|\[사진\s*\d+\]", " ", combined_src)
+    clean_t = re.sub(r"[^\w\s가-힣]", " ", clean_t)
+    stop_words = {
+        "패션", "코디", "착장", "정보", "브랜드", "가격", "어디꺼", "스타일", "룩",
+        "모음", "총정리", "추천", "블로그", "네이버", "요즘", "화제", "인스타", "사복",
+        "공항패션", "제작발표회", "출국", "입국", "근황", "일상", "데일리룩", "아이템"
+    }
+    tokens = []
+    for w in clean_t.split():
+        if len(w) >= 2 and w not in stop_words and w not in tokens:
+            tokens.append(w)
+
+    search_queries = []
+    if len(tokens) >= 2:
+        search_queries.append(" ".join(tokens[:3]))
+        search_queries.append(" ".join(tokens[:2]))
+    elif tokens:
+        search_queries.append(tokens[0])
+
+    article_urls = []
+    seen_u = set()
+
+    for q in search_queries:
+        if len(article_urls) >= 4:
+            break
+        q_euc = urllib.parse.quote(q.encode("euc-kr", errors="ignore"))
+        for search_u in [
+            f"https://news.nate.com/search?q={q_euc}",
+            f"https://m.news.nate.com/search?q={q_euc}",
+        ]:
+            _, h_str = fetch_html_smart(search_u)
+            if not h_str:
+                try:
+                    md_s = fetch_via_jina_reader(search_u)
+                    for _, href in re.findall(r'\[([^\]]{8,120})\]\((https?://(?:m\.)?news\.nate\.com/view/[^\s\)]+)\)', md_s):
+                        cu = href.split("?")[0].replace("://m.news.nate.com/", "://news.nate.com/")
+                        if cu not in seen_u:
+                            seen_u.add(cu)
+                            article_urls.append(cu)
+                            if len(article_urls) >= 4:
+                                break
+                except Exception:
+                    pass
+                continue
+
+            for href in re.findall(r'href=["\']((?:https?:)?//(?:m\.)?news\.nate\.com/view/[^"\']+)["\']', h_str, re.IGNORECASE):
+                cu = ("https:" + href if href.startswith("//") else href).split("?")[0].replace("://m.news.nate.com/", "://news.nate.com/")
+                if cu not in seen_u:
+                    seen_u.add(cu)
+                    article_urls.append(cu)
+                    if len(article_urls) >= 4:
+                        break
+            if article_urls:
+                break
+
+    clean_images = []
+    clean_thumbs = []
+    matched_sources = []
+
+    for art_u in article_urls:
+        if len(clean_images) >= 10:
+            break
+        try:
+            art_title, _, imgs, thumbs = extract_blog_text_and_photos(art_u)
+            if imgs:
+                matched_sources.append(art_title[:30])
+                for im_b, th_im in zip(imgs, thumbs):
+                    if len(clean_images) >= 10:
+                        break
+                    clean_images.append(im_b)
+                    clean_thumbs.append(th_im)
+        except Exception:
+            continue
+
+    return clean_images, clean_thumbs, matched_sources
 def generate_with_gemini(contents, sys_prompt):
     err_logs = []
     # 내 API 키에서 실제로 지원되는 generateContent 모델 목록 자동 조회 + 우선순위 정렬
