@@ -807,7 +807,7 @@ def fetch_fashion_blogs_top20():
     return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """직통 HTML + r.jina.ai 마크다운 병행 추출로 본문과 고화질 사진(최대 10장) 100% 확보"""
+    """직통 HTML + r.jina.ai 마크다운 전수 스캔으로 본문과 고화질 사진(최대 10장) 100% 확보"""
     url = normalize_target_url(raw_url)
     final_url, page_html = fetch_html_smart(url)
 
@@ -816,7 +816,7 @@ def extract_blog_text_and_photos(raw_url):
         "profile", "blank", "emoticon", "sticker", "map", "static.naver",
         "blogpfthumb", "ogq", "gfmarket", "storep", "transparent",
         "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg",
-        "se-sticker", "link_thumb", "oglink"
+        "se-sticker", "link_thumb", "oglink", "dthumb-phinf"
     ]
     saved_images_bytes = []
     ai_thumbs = []
@@ -855,7 +855,7 @@ def extract_blog_text_and_photos(raw_url):
         return None
 
     def download_and_save_single_img(raw_img_url):
-        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"')
+        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"').rstrip(")")
         if u_clean.startswith("//"):
             u_clean = "https:" + u_clean
         elif u_clean.startswith("/"):
@@ -913,7 +913,12 @@ def extract_blog_text_and_photos(raw_url):
         se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
         if se_start:
             sub_html = page_html[se_start.end():]
-            end_m = re.search(r'(?:<!--\s*//\s*SE_DOC_HEADER_END|<div[^>]+class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area))', sub_html, re.IGNORECASE)
+            # 하단 '이 블로그의 다른 글 / 추천글' 영역 직전까지만 잘라 엉뚱한 썸네일 혼입 차단
+            end_m = re.search(
+                r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|<div[^>]+class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area|blog_author))',
+                sub_html,
+                re.IGNORECASE
+            )
             body_html = sub_html[:end_m.start()] if end_m else sub_html
         else:
             for pattern in [
@@ -958,10 +963,11 @@ def extract_blog_text_and_photos(raw_url):
 
         html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
+        # 본문 영역(body_html) 내부의 네이버/네이트 고화질 CDN 이미지 주소 전수 스캔 (최대 10장)
         if len(saved_images_bytes) < 10:
-            scan_target = html.unescape(body_html if se_start else page_html)
+            scan_target = html.unescape(body_html).replace("\\/", "/")
             raw_cdn_imgs = re.findall(
-                r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|(?:https?:)?//[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
+                r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\)]+|(?:https?:)?//[^"\'\s<>\\)]*nateimg\.co\.kr/[^"\'\s<>\\)]+',
                 scan_target,
                 re.IGNORECASE,
             )
@@ -984,8 +990,8 @@ def extract_blog_text_and_photos(raw_url):
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
 
-    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 지연 로딩으로 사진이 1장 이하만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 추가 수집
-    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) <= 1):
+    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 지연 로딩으로 사진이 5장 미만만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 전수 수집
+    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) < 5):
         try:
             md_text = fetch_via_jina_reader(url)
             if md_text and len(md_text.strip()) >= 80:
@@ -995,13 +1001,22 @@ def extract_blog_text_and_photos(raw_url):
                         page_title = title_m.group(1).strip()
 
                 md_body = md_text.split("Markdown Content:", 1)[1] if "Markdown Content:" in md_text else md_text
+                # 마크다운 하단의 '이 블로그의 다른 글 / 공감 / 댓글' 섹션 이전까지만 스캔
+                md_cut = re.split(r'\n(?:#+\s*이 블로그의 다른 글|이 블로그\s*카테고리\s*글|공감\s*\d+\s*댓글)', md_body)[0]
 
                 def replace_md_img(m):
                     img_u = m.group(1).strip()
                     mk = download_and_save_single_img(img_u)
                     return f"\n{mk}\n" if mk else "\n"
 
-                md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_body)
+                md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_cut)
+
+                if len(saved_images_bytes) < 10:
+                    for extra_u in re.findall(r'https?://(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^\s\)"\'<>]+', md_cut):
+                        download_and_save_single_img(extra_u)
+                        if len(saved_images_bytes) >= 10:
+                            break
+
                 if len(body_res.strip()) < 80:
                     md_clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", md_with_markers)
                     lines = [ln.strip() for ln in md_clean.splitlines() if ln.strip() and not ln.strip().startswith(("URL Source:", "Published Time:"))]
