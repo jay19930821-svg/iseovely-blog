@@ -698,7 +698,7 @@ def fetch_nate_ent_top20():
     return results[:20]
 
 def fetch_fashion_blogs_top20():
-    """탭 1 전용: 연예인 패션 인기 블로그 1~20위 수집"""
+    """탭 1 전용: 연예인 패션 인기 블로그 1~20위 수집 (네이버 + 다음 검색 + 구글 RSS 3중 우회)"""
     results = []
     seen_urls = set()
     seen_titles = set()
@@ -710,53 +710,86 @@ def fetch_fashion_blogs_top20():
         "연예인 인스타 사복 코디",
     ]
 
+    def add_blog_item(raw_u, raw_title, src_label="패션블로그"):
+        clean_u = raw_u.split("?")[0].split("#")[0].strip()
+        m_p = re.search(r"(?:m\.)?blog\.naver\.com/([a-zA-Z0-9_-]+)/(\d+)", clean_u)
+        if not m_p:
+            return False
+        norm_u = f"https://m.blog.naver.com/{m_p.group(1)}/{m_p.group(2)}"
+        if norm_u in seen_urls:
+            return False
+        t_clean = re.sub(r"!\[.*?\]\(.*?\)", " ", raw_title)
+        t_clean = re.sub(r"<[^>]+>", " ", html.unescape(t_clean))
+        t_clean = re.sub(r"\s+", " ", t_clean).strip()
+        t_clean = re.sub(r"\s*-\s*네이버\s*블로그.*$", "", t_clean).strip()
+        if len(t_clean) < 8 or t_clean in seen_titles:
+            return False
+        seen_urls.add(norm_u)
+        seen_titles.add(t_clean)
+        results.append({"source": src_label, "title": t_clean[:80], "url": norm_u})
+        return True
+
+    # 1차: 네이버 블로그 검색 직통 시도
     for q in queries:
         if len(results) >= 20:
             break
         m_search_u = f"https://m.search.naver.com/search.naver?where=m_blog&sm=mtb_jum&query={urllib.parse.quote(q)}"
         _, h_str = fetch_html_smart(m_search_u, referer="https://m.naver.com/")
-        if not h_str:
-            pc_search_u = f"https://search.naver.com/search.naver?ssc=tab.blog.all&sm=tab_jum&query={urllib.parse.quote(q)}"
-            _, h_str = fetch_html_smart(pc_search_u, referer="https://www.naver.com/")
-
         if h_str:
-            matches = re.findall(
+            for href, inner_html in re.findall(
                 r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
-                h_str,
-                re.DOTALL | re.IGNORECASE
-            )
-            for href, inner_html in matches:
-                clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
-                if clean_u in seen_urls:
-                    continue
-                title_txt = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", inner_html))).strip()
-                if len(title_txt) >= 10 and title_txt not in seen_titles:
-                    seen_urls.add(clean_u)
-                    seen_titles.add(title_txt)
-                    results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
+                h_str, re.DOTALL | re.IGNORECASE
+            ):
+                add_blog_item(href, inner_html, "네이버패션블로그")
+                if len(results) >= 20:
+                    return results[:20]
+
+    # 2차: 해외 IP 캡차 우회 — 다음(Daum) 블로그 검색에서 네이버 패션 블로그 인기글 추출
+    if len(results) < 20:
+        for q in queries:
+            if len(results) >= 20:
+                break
+            daum_u = f"https://search.daum.net/search?w=blog&DA=PGD&q={urllib.parse.quote(q)}"
+            try:
+                req = urllib.request.Request(
+                    daum_u,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                        "Accept-Language": "ko-KR,ko;q=0.9",
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    d_html = resp.read().decode("utf-8", errors="ignore")
+                for href, inner_html in re.findall(
+                    r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
+                    d_html, re.DOTALL | re.IGNORECASE
+                ):
+                    add_blog_item(href, inner_html, "인기패션블로그")
                     if len(results) >= 20:
                         return results[:20]
+            except Exception:
+                continue
 
-        if len(results) < 20:
+    # 3차: 구글 뉴스/검색 RSS 백업으로 20위까지 100% 보충
+    if len(results) < 20:
+        for gq in ["site:blog.naver.com 연예인 공항패션", "site:blog.naver.com 연예인 사복패션 브랜드"]:
+            if len(results) >= 20:
+                break
+            rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(gq)}&hl=ko&gl=KR&ceid=KR:ko"
             try:
-                md_txt = fetch_via_jina_reader(m_search_u)
-                md_links = re.findall(
-                    r'\[([^\]]{10,120})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+)\)',
-                    md_txt
-                )
-                for raw_t, href in md_links:
-                    clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
-                    if clean_u in seen_urls:
-                        continue
-                    title_txt = re.sub(r"!\[.*?\]\(.*?\)", "", raw_t).strip()
-                    if len(title_txt) >= 10 and title_txt not in seen_titles:
-                        seen_urls.add(clean_u)
-                        seen_titles.add(title_txt)
-                        results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
+                req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    root = ET.fromstring(resp.read())
+                for item in root.findall(".//item"):
+                    t_el = item.find("title")
+                    l_el = item.find("link")
+                    if t_el is not None and l_el is not None and t_el.text and l_el.text:
+                        real_u = decode_google_news_url(l_el.text.strip())
+                        add_blog_item(real_u, t_el.text, "패션블로그")
                         if len(results) >= 20:
                             return results[:20]
             except Exception:
-                pass
+                continue
 
     return results[:20]
 
