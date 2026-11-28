@@ -1115,6 +1115,8 @@ with left_col:
                         with st.spinner("연예인 패션 인기 블로그 1~20위를 불러오는 중..."):
                             fetched = fetch_fashion_blogs_top20()
                             st.session_state[mode_news_key] = fetched
+                            if not fetched:
+                                st.error("패션 블로그 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
             else:
                 if st.button("🏆 네이트 실시간 급상승 관심뉴스 1~20위 불러오기", type="primary", use_container_width=True, key="btn_nate_issue"):
                     with st.spinner("네이트 실시간 급상승 관심뉴스 1~20위를 불러오는 중..."):
