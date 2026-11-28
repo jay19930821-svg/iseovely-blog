@@ -137,7 +137,7 @@ DEFAULT_STRATEGY_MEMO = """📌 [일 방문자 1만+ 달성 운영 매뉴얼]
 
 3️⃣ 모드별 소재 활용 팁
 - [👗 패션·착장 모드]: 네이트 실시간 관심뉴스 1~20위 + 패션 블로그 인기 1~20위 동시 활용
-- [🔥 연예인 이슈 모드]: 네이트 연예 실시간 급상승 관심뉴스 1~20위 선택 일괄 변환
+- [🔥 연예인 이슈 모드]: 네이트 연예 실시간 급상승 관심뉴스 1~20위 선택 일괄 변환 (외부 모바일 접속 시 숏폼 모드 활용)
 - [🍽️ 맛집 후기 모드]: 직접 찍은 사진 불러오기 → 체험단 가이드라인 입력 후 바로 생성
 
 4️⃣ 자동화 프로그램 30초 발행 순서
@@ -194,9 +194,9 @@ COMMON_RICH_FORMAT_RULES = (
 )
 
 FASHION_FORMAT_RULES = (
-    "\n\n[👗 패션·착장 분석 모드 전용 규칙 · 상위 5% 황금 글자 수 · 3색 심플 음영 서식]\n"
-    "1. [네이버 상위 5% 애드포스트 황금 글자 수 준수 (공백 제외 1,500~2,000자)]: "
-    "네이버 홈피드 노출과 중간 애드포스트 수익이 극대화되는 '공백 제외 1,500자 ~ 2,000자' 분량을 반드시 채워 작성해!\n"
+    "\n\n[👗 패션·착장 분석 모드 전용 규칙 · 핵심 집중 글자 수 · 3색 심플 음영 서식]\n"
+    "1. [공백 제외 900자 ~ 1,200자 분량 준수]: "
+    "네이버 홈피드 가독성과 체류시간이 가장 좋은 '공백 제외 900자 ~ 1,200자' 분량을 정확히 맞춰 군더더기 없이 알차게 작성해!\n"
     "2. [자기소개 금지 & 맨 위 제목 2가지 추천]: "
     "자기소개 인사말 절대 금지! 맨 첫 줄부터 아래 형식으로 제목 2가지만 먼저 제시해 줘:\n"
     "   [제목 추천 1 - 이서블리 시그니처형] (후킹 문구 + 연예인/브랜드/아이템 포인트 + 이모지 ✨ 조합)\n"
@@ -248,6 +248,7 @@ ISSUE_SHORT_FORMAT_RULES = (
     "7. [맨 마지막 11pt 출처 표기 & 태그 30개]: "
     "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 인물·이슈·방송 관련 검색 태그 30개를 쉼표로 구분해 출력해."
 )
+
 FOOD_FORMAT_RULES = (
     "\n\n[🍽️ 맛집 후기 자동화 모드 전용 규칙 · 실방문 생생 리뷰 · 3색 심플 음영 서식]\n"
     "1. [네이버 상위 5% 맛집 리뷰 황금 글자 수 준수 (공백 제외 1,200~1,800자)]: "
@@ -824,7 +825,7 @@ def fetch_fashion_blogs_top20():
     return combined[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """네이버 블로그 단독/묶음/슬라이드 이미지 전수 추출 + r.jina.ai 백업으로 고화질 사진(최대 10장) 100% 확보"""
+    """네이버 블로그 단독/묶음/슬라이드 이미지 전수 추출 + r.jina.ai 백업으로 고화질 사진(최대 13장) 100% 확보"""
     url = normalize_target_url(raw_url)
     is_naver_blog = ("blog.naver.com" in url)
 
@@ -897,7 +898,7 @@ def extract_blog_text_and_photos(raw_url):
         base_key = path_only if ("pstatic.net" in low_u or "nateimg.co.kr" in low_u) else u_clean.split("?")[0]
         if base_key in url_to_photo_tag:
             return url_to_photo_tag[base_key]
-        if base_key in tried_urls or len(saved_images_bytes) >= 10:
+        if base_key in tried_urls or len(saved_images_bytes) >= 13:
             return None
         tried_urls.add(base_key)
 
@@ -940,7 +941,6 @@ def extract_blog_text_and_photos(raw_url):
         se_start = re.search(r'class=["\'][^"\']*se-main-container[^"\']*["\']', page_html, re.IGNORECASE)
         if se_start:
             sub_html = page_html[se_start.start():]
-            # 본문 소제목이 중간에 잘리지 않도록 실제 포스트 하단 댓글·공감·태그 영역만 정확히 차단
             end_m = re.search(
                 r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|id=["\'](?:post-bottom|commentArea|tagList)["\']|class=["\'][^"\']*(?:post_tag|btn_like_area|post_writer|another_category|recommend_post|comment_area))',
                 sub_html,
@@ -966,7 +966,6 @@ def extract_blog_text_and_photos(raw_url):
         clean_html = re.sub(r"<script.*?>.*?</script>", "", body_html, flags=re.DOTALL)
         clean_html = re.sub(r"<style.*?>.*?</style>", "", clean_html, flags=re.DOTALL)
 
-        # 묶음/슬라이드 이미지 컨테이너(div)가 안쪽 img/a 태그를 가리지 않도록 img와 a 태그만 정밀 스캔
         def replace_media_tag(match):
             tag_str = match.group(0)
             if "oglink" in tag_str.lower() or "profile" in tag_str.lower() or "link_thumb" in tag_str.lower():
@@ -991,8 +990,7 @@ def extract_blog_text_and_photos(raw_url):
 
         html_with_markers = re.sub(r"<(?:img|a)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
-        # 본문(body_html) 내부에서 아직 안 잡힌 pstatic.net / nateimg.co.kr 이미지 경로 전수 보충
-        if len(saved_images_bytes) < 10:
+        if len(saved_images_bytes) < 13:
             scan_target = html.unescape(body_html).replace("\\/", "/")
             raw_cdn_imgs = re.findall(
                 r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\)]+|(?:https?:)?//[^"\'\s<>\\)]*nateimg\.co\.kr/[^"\'\s<>\\)]+',
@@ -1004,7 +1002,7 @@ def extract_blog_text_and_photos(raw_url):
                 mk = download_and_save_single_img(r_url)
                 if mk and mk not in extra_markers:
                     extra_markers.append(mk)
-                if len(saved_images_bytes) >= 10:
+                if len(saved_images_bytes) >= 13:
                     break
             if extra_markers:
                 html_with_markers += "\n" + "\n".join(extra_markers)
@@ -1033,10 +1031,10 @@ def extract_blog_text_and_photos(raw_url):
 
                 md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_cut)
 
-                if len(saved_images_bytes) < 10:
+                if len(saved_images_bytes) < 13:
                     for extra_u in re.findall(r'https?://(?:postfiles|blogfiles|mblogthumb-phinf)\.pstatic\.net/[^\s\)"\'<>]+', md_cut):
                         download_and_save_single_img(extra_u)
-                        if len(saved_images_bytes) >= 10:
+                        if len(saved_images_bytes) >= 13:
                             break
 
                 if len(body_res.strip()) < 80:
@@ -1056,7 +1054,6 @@ def extract_blog_text_and_photos(raw_url):
 
 def generate_with_gemini(contents, sys_prompt):
     err_logs = []
-    # 내 API 키에서 실제로 지원되는 generateContent 모델 목록 자동 조회 + 우선순위 정렬
     preferred = ["gemini-3.5-flash", "gemini-3.5-pro-preview", "gemini-2.5-pro", "gemini-3.5-flash-lite"]
     available_models = list(preferred)
     try:
@@ -1157,7 +1154,7 @@ with left_col:
     mode_urls_key = f"urls_{cur_mode}"
 
     if cur_mode == "fashion":
-        st.markdown('<div class="mode-banner-fashion">👗 현재 모드: [패션·착장 분석 전용] — 아이템·브랜드·컬러 배색·실생활 코디 팁 중심으로 작성합니다.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="mode-banner-fashion">👗 현재 모드: [패션·착장 분석 전용] — 아이템·브랜드·컬러 배색·실생활 코디 팁 중심으로 작성합니다. (900~1,200자 · 사진 최대 13장)</div>', unsafe_allow_html=True)
     elif cur_mode == "issue":
         st.markdown('<div class="mode-banner-issue">🔥 현재 모드: [연예인 이슈·근황 전용] — 사건·방송 핵심 요약, 대중 반응, 비하인드 스토리 중심으로 작성합니다.</div>', unsafe_allow_html=True)
     else:
@@ -1279,22 +1276,23 @@ with left_col:
                             if len(o_body.strip()) < 50:
                                 raise ValueError("해당 URL에서 본문을 읽어오지 못했습니다. 주소가 올바른지 확인해 주세요.")
 
-                            # 모바일 숏폼 이슈 모드일 때는 사진을 최대 3장까지만 사용
                             if is_short_issue:
                                 img_bytes_list = img_bytes_list[:3]
                                 ai_thumbs = ai_thumbs[:3]
+                            elif is_issue:
+                                img_bytes_list = img_bytes_list[:10]
+                                ai_thumbs = ai_thumbs[:10]
 
                             img_cnt = len(img_bytes_list)
                             if is_issue and is_short_issue:
                                 len_inst = "1. 모바일에서 빠르게 읽히는 '공백 제외 600자 ~ 900자' 핵심 요약 숏폼 분량으로 군더더기 없이 작성해 줘!\n"
                                 mode_inst = "2. [연예인 이슈·숏폼 모드]: 핵심 사건 팩트와 대중 반응만 임팩트 있게 요약해 줘!\n"
-                            else:
+                            elif is_issue:
                                 len_inst = "1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 풍성하게 작성해 줘!\n"
-                                mode_inst = (
-                                    "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
-                                    if is_issue
-                                    else "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
-                                )
+                                mode_inst = "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
+                            else:
+                                len_inst = "1. 가독성이 가장 좋은 '공백 제외 900자 ~ 1,200자' 분량을 정확히 맞춰 알차게 작성해 줘!\n"
+                                mode_inst = "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
 
                             photo_guide = (
                                 f"4. 첨부된 실제 사진 {img_cnt}장을 확인하고 각 [사진 N] 위아래에 실제 장면·착장과 일치하는 내용을 써줘.\n"
@@ -1315,7 +1313,7 @@ with left_col:
                             prompt_txt += f"\n[원본 제목]: {p_title}\n\n[참고 원문 및 사진 순서표]:\n{o_body}"
 
                             contents = [prompt_txt]
-                            max_ai_imgs = 3 if is_short_issue else 10
+                            max_ai_imgs = 3 if is_short_issue else (10 if is_issue else 13)
                             for i_idx, th in enumerate(ai_thumbs[:max_ai_imgs], start=1):
                                 contents.append(f"[첨부 사진 {i_idx}번]")
                                 contents.append(th)
