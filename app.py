@@ -698,20 +698,13 @@ def fetch_nate_ent_top20():
     return results[:20]
 
 def fetch_fashion_blogs_top20():
-    """탭 1 전용: 연예인 패션 인기 블로그 1~20위 수집 (네이버 + 다음 검색 + 구글 RSS 3중 우회)"""
+    """탭 1 전용: 연예인 패션 인기 블로그 1~20위 수집 (Bing 웹 RSS + r.jina.ai 다음·네이버 블로그 우회)"""
     results = []
     seen_urls = set()
     seen_titles = set()
 
-    queries = [
-        "연예인 공항패션 착장",
-        "연예인 사복패션 브랜드",
-        "드라마 제작발표회 패션",
-        "연예인 인스타 사복 코디",
-    ]
-
     def add_blog_item(raw_u, raw_title, src_label="패션블로그"):
-        clean_u = raw_u.split("?")[0].split("#")[0].strip()
+        clean_u = urllib.parse.unquote(raw_u).split("?")[0].split("#")[0].strip()
         m_p = re.search(r"(?:m\.)?blog\.naver\.com/([a-zA-Z0-9_-]+)/(\d+)", clean_u)
         if not m_p:
             return False
@@ -721,7 +714,7 @@ def fetch_fashion_blogs_top20():
         t_clean = re.sub(r"!\[.*?\]\(.*?\)", " ", raw_title)
         t_clean = re.sub(r"<[^>]+>", " ", html.unescape(t_clean))
         t_clean = re.sub(r"\s+", " ", t_clean).strip()
-        t_clean = re.sub(r"\s*-\s*네이버\s*블로그.*$", "", t_clean).strip()
+        t_clean = re.sub(r"\s*[-|:]\s*(?:네이버\s*블로그|NAVER).*$", "", t_clean).strip()
         if len(t_clean) < 8 or t_clean in seen_titles:
             return False
         seen_urls.add(norm_u)
@@ -729,65 +722,49 @@ def fetch_fashion_blogs_top20():
         results.append({"source": src_label, "title": t_clean[:80], "url": norm_u})
         return True
 
-    # 1차: 네이버 블로그 검색 직통 시도
-    for q in queries:
+    # 1차: Bing 웹 검색 RSS (미국 서버 IP 차단 제로 + blog.naver.com 실제 포스팅 100% 반환)
+    bing_queries = [
+        "site:blog.naver.com 연예인 공항패션 착장",
+        "site:blog.naver.com 연예인 사복패션 브랜드",
+        "site:blog.naver.com 드라마 제작발표회 패션",
+    ]
+    for bq in bing_queries:
         if len(results) >= 20:
             break
-        m_search_u = f"https://m.search.naver.com/search.naver?where=m_blog&sm=mtb_jum&query={urllib.parse.quote(q)}"
-        _, h_str = fetch_html_smart(m_search_u, referer="https://m.naver.com/")
-        if h_str:
-            for href, inner_html in re.findall(
-                r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
-                h_str, re.DOTALL | re.IGNORECASE
-            ):
-                add_blog_item(href, inner_html, "네이버패션블로그")
-                if len(results) >= 20:
-                    return results[:20]
-
-    # 2차: 해외 IP 캡차 우회 — 다음(Daum) 블로그 검색에서 네이버 패션 블로그 인기글 추출
-    if len(results) < 20:
-        for q in queries:
-            if len(results) >= 20:
-                break
-            daum_u = f"https://search.daum.net/search?w=blog&DA=PGD&q={urllib.parse.quote(q)}"
-            try:
-                req = urllib.request.Request(
-                    daum_u,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                        "Accept-Language": "ko-KR,ko;q=0.9",
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    d_html = resp.read().decode("utf-8", errors="ignore")
-                for href, inner_html in re.findall(
-                    r'<a[^>]+href=["\'](https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^"\']*)["\'][^>]*>(.*?)</a>',
-                    d_html, re.DOTALL | re.IGNORECASE
-                ):
-                    add_blog_item(href, inner_html, "인기패션블로그")
+        bing_rss = f"https://www.bing.com/search?format=rss&q={urllib.parse.quote(bq)}"
+        try:
+            req = urllib.request.Request(
+                bing_rss,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept-Language": "ko-KR,ko;q=0.9",
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                xml_bytes = resp.read()
+            root = ET.fromstring(xml_bytes)
+            for item in root.findall(".//item"):
+                t_el = item.find("title")
+                l_el = item.find("link")
+                if t_el is not None and l_el is not None and t_el.text and l_el.text:
+                    add_blog_item(l_el.text.strip(), t_el.text.strip(), "인기패션블로그")
                     if len(results) >= 20:
                         return results[:20]
-            except Exception:
-                continue
+        except Exception:
+            continue
 
-    # 3차: 구글 뉴스/검색 RSS 백업으로 20위까지 100% 보충
+    # 2차: r.jina.ai 리더 엔진으로 다음(Daum) 블로그 검색 페이지 마크다운 파싱
     if len(results) < 20:
-        for gq in ["site:blog.naver.com 연예인 공항패션", "site:blog.naver.com 연예인 사복패션 브랜드"]:
+        for dq in ["연예인 공항패션 착장", "연예인 사복패션 브랜드"]:
             if len(results) >= 20:
                 break
-            rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(gq)}&hl=ko&gl=KR&ceid=KR:ko"
+            daum_u = f"https://search.daum.net/search?w=blog&DA=PGD&q={urllib.parse.quote(dq)}"
             try:
-                req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    root = ET.fromstring(resp.read())
-                for item in root.findall(".//item"):
-                    t_el = item.find("title")
-                    l_el = item.find("link")
-                    if t_el is not None and l_el is not None and t_el.text and l_el.text:
-                        real_u = decode_google_news_url(l_el.text.strip())
-                        add_blog_item(real_u, t_el.text, "패션블로그")
-                        if len(results) >= 20:
-                            return results[:20]
+                md_txt = fetch_via_jina_reader(daum_u)
+                for raw_t, href in re.findall(r'\[([^\]]{8,300})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^\s\)]*)\)', md_txt):
+                    add_blog_item(href, raw_t, "패션블로그")
+                    if len(results) >= 20:
+                        return results[:20]
             except Exception:
                 continue
 
