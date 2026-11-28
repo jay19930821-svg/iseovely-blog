@@ -137,7 +137,7 @@ DEFAULT_STRATEGY_MEMO = """📌 [일 방문자 1만+ 달성 운영 매뉴얼]
 
 3️⃣ 모드별 소재 활용 팁
 - [👗 패션·착장 모드]: 네이트 실시간 관심뉴스 1~20위 + 패션 블로그 인기 1~20위 동시 활용
-- [🔥 연예인 이슈 모드]: 네이트 연예 실시간 급상승 관심뉴스 1~20위 선택 일괄 변환 (외부 모바일 접속 시 숏폼 모드 활용)
+- [🔥 연예인 이슈 모드]: 네이트 연예 실시간 급상승 관심뉴스 1~20위 선택 일괄 변환
 - [🍽️ 맛집 후기 모드]: 직접 찍은 사진 불러오기 → 체험단 가이드라인 입력 후 바로 생성
 
 4️⃣ 자동화 프로그램 30초 발행 순서
@@ -194,9 +194,9 @@ COMMON_RICH_FORMAT_RULES = (
 )
 
 FASHION_FORMAT_RULES = (
-    "\n\n[👗 패션·착장 분석 모드 전용 규칙 · 핵심 집중 글자 수 · 3색 심플 음영 서식]\n"
-    "1. [공백 제외 900자 ~ 1,200자 분량 준수]: "
-    "네이버 홈피드 가독성과 체류시간이 가장 좋은 '공백 제외 900자 ~ 1,200자' 분량을 정확히 맞춰 군더더기 없이 알차게 작성해!\n"
+    "\n\n[👗 패션·착장 분석 모드 전용 규칙 · 상위 5% 황금 글자 수 · 3색 심플 음영 서식]\n"
+    "1. [네이버 상위 5% 애드포스트 황금 글자 수 준수 (공백 제외 1,500~2,000자)]: "
+    "네이버 홈피드 노출과 중간 애드포스트 수익이 극대화되는 '공백 제외 1,500자 ~ 2,000자' 분량을 반드시 채워 작성해!\n"
     "2. [자기소개 금지 & 맨 위 제목 2가지 추천]: "
     "자기소개 인사말 절대 금지! 맨 첫 줄부터 아래 형식으로 제목 2가지만 먼저 제시해 줘:\n"
     "   [제목 추천 1 - 이서블리 시그니처형] (후킹 문구 + 연예인/브랜드/아이템 포인트 + 이모지 ✨ 조합)\n"
@@ -226,24 +226,6 @@ ISSUE_FORMAT_RULES = (
     "   그 다음 줄에 '===' 를 적고 자기소개 없이 바로 본문 첫 문장을 시작해.\n"
     "4. [첨부 사진 장면·표정·상황 100% 정확 일치]: "
     "첨부된 실제 사진이 있으면 직접 확인하고 각 소제목 섹션마다 [사진 1]~[사진 N]을 3~5줄 글과 번갈아 배치하며 해당 사진 속 실제 장면·표정과 일치하게 묘사해. (첨부 사진이 0장이면 [사진 N] 표기 없이 작성해.)\n"
-    + COMMON_RICH_FORMAT_RULES +
-    "7. [맨 마지막 11pt 출처 표기 & 태그 30개]: "
-    "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 인물·이슈·방송 관련 검색 태그 30개를 쉼표로 구분해 출력해."
-)
-
-ISSUE_SHORT_FORMAT_RULES = (
-    "\n\n[⚡ 연예인 이슈·근황 모바일 숏폼(핵심 요약) 전용 규칙 · 600~900자 · 빠른 발행용]\n"
-    "1. [핵심만 압축한 모바일 숏폼 글자 수 (공백 제외 600~900자)]: "
-    "군더더기 배경 설명은 빼고 '무슨 일이 있었는지 핵심 팩트 + 대중 반응'만 임팩트 있게 공백 제외 600~900자 분량으로 빠르게 읽히게 작성해!\n"
-    "2. [자기소개 금지 & 맨 위 제목 2가지 추천]: "
-    "자기소개 인사말 절대 금지! 맨 첫 줄부터 아래 형식으로 제목 2가지만 먼저 제시해 줘:\n"
-    "   [제목 추천 1 - 이서블리 이슈 후킹형] (궁금증을 유발하는 핵심 한 줄 + 인물/프로그램명 + 이모지 ✨ 조합)\n"
-    "   [제목 추천 2 - 상위 5% 검색 유입형] (인물명 + 핵심 사건/방송 키워드 중심의 클릭을 부르는 제목)\n"
-    "   그 다음 줄에 '===' 를 적고 자기소개 없이 바로 핵심 내용으로 직진해.\n"
-    "3. [컴팩트한 2~3개 섹션 구성]: "
-    "① 화제 된 핵심 포인트 요약, ② 네티즌·팬 실시간 반응 & 한 줄 정리 형태로 짧고 굵게 구성해.\n"
-    "4. [첨부 사진 1~3장 정확 일치]: "
-    "첨부된 실제 사진(1~3장)을 확인하고 각 [사진 1]~[사진 N] 위아래에 실제 장면·표정과 일치하는 핵심 멘트만 짧게 써줘. (0장이면 [사진 N] 표기 생략)\n"
     + COMMON_RICH_FORMAT_RULES +
     "7. [맨 마지막 11pt 출처 표기 & 태그 30개]: "
     "맨 마지막 줄에는 원문에 출처가 있으면 '출처- (원문 출처)'를, 없으면 정확히 '출처-' 만 단독 줄로 적고, 바로 다음 줄 '===TAGS===' 아래에 인물·이슈·방송 관련 검색 태그 30개를 쉼표로 구분해 출력해."
@@ -662,7 +644,6 @@ def fetch_nate_ent_top20():
         "https://m.news.nate.com/rank/interest?sc=ent",
     ]
 
-    # 1차: 직통 HTML 파싱 시도
     for r_url in rank_targets:
         _, h_str = fetch_html_smart(r_url)
         if not h_str:
@@ -688,7 +669,6 @@ def fetch_nate_ent_top20():
                 if len(results) >= 20:
                     return results[:20]
 
-    # 2차: 해외 IP 차단으로 직통 실패 시 r.jina.ai 리더 엔진으로 네이트 관심뉴스 1~20위 마크다운 링크 파싱
     if len(results) < 10:
         for r_url in rank_targets:
             try:
@@ -718,7 +698,7 @@ def fetch_nate_ent_top20():
     return results[:20]
 
 def fetch_fashion_blogs_top20():
-    """탭 1 전용: 연예인 패션 인기 블로그 1~20위 수집 (어제 정상 작동 파서 복구 + 백업)"""
+    """탭 1 전용: 연예인 패션 인기 블로그 1~20위 수집"""
     results = []
     seen_urls = set()
     seen_titles = set()
@@ -753,7 +733,7 @@ def fetch_fashion_blogs_top20():
                 if len(title_txt) >= 10 and title_txt not in seen_titles:
                     seen_urls.add(clean_u)
                     seen_titles.add(title_txt)
-                    results.append({"source": "패션블로그", "title": title_txt[:80], "url": clean_u})
+                    results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
                     if len(results) >= 20:
                         return results[:20]
 
@@ -761,75 +741,36 @@ def fetch_fashion_blogs_top20():
             try:
                 md_txt = fetch_via_jina_reader(m_search_u)
                 md_links = re.findall(
-                    r'\[([^\]]{10,300})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+[^\s\)]*)\)',
+                    r'\[([^\]]{10,120})\]\((https?://(?:m\.)?blog\.naver\.com/[a-zA-Z0-9_-]+/\d+)\)',
                     md_txt
                 )
                 for raw_t, href in md_links:
                     clean_u = href.split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
                     if clean_u in seen_urls:
                         continue
-                    title_txt = re.sub(r"!\[.*?\]\(.*?\)", " ", raw_t)
-                    title_txt = re.sub(r"\s+", " ", title_txt).strip()
+                    title_txt = re.sub(r"!\[.*?\]\(.*?\)", "", raw_t).strip()
                     if len(title_txt) >= 10 and title_txt not in seen_titles:
                         seen_urls.add(clean_u)
                         seen_titles.add(title_txt)
-                        results.append({"source": "패션블로그", "title": title_txt[:80], "url": clean_u})
+                        results.append({"source": "패션블로그", "title": title_txt, "url": clean_u})
                         if len(results) >= 20:
                             return results[:20]
             except Exception:
                 pass
 
-    # 네이버 검색 일시 지연 시 구글 RSS 백업으로 20위까지 자동 보충
-    if len(results) < 20:
-        for gq in ["site:blog.naver.com 연예인 공항패션", "site:blog.naver.com 연예인 사복패션"]:
-            if len(results) >= 20:
-                break
-            rss_u = f"https://news.google.com/rss/search?q={urllib.parse.quote(gq)}&hl=ko&gl=KR&ceid=KR:ko"
-            try:
-                req = urllib.request.Request(rss_u, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    root = ET.fromstring(resp.read())
-                for item in root.findall(".//item"):
-                    t_el = item.find("title")
-                    l_el = item.find("link")
-                    if t_el is None or l_el is None or not t_el.text or not l_el.text:
-                        continue
-                    real_u = decode_google_news_url(l_el.text.strip()).split("?")[0].replace("://blog.naver.com/", "://m.blog.naver.com/")
-                    if "blog.naver.com/" not in real_u or real_u in seen_urls:
-                        continue
-                    title_txt = re.sub(r"\s*-\s*네이버\s*블로그.*$", "", html.unescape(t_el.text)).strip()
-                    if len(title_txt) >= 10 and title_txt not in seen_titles:
-                        seen_urls.add(real_u)
-                        seen_titles.add(title_txt)
-                        results.append({"source": "패션블로그", "title": title_txt[:80], "url": real_u})
-                        if len(results) >= 20:
-                            return results[:20]
-            except Exception:
-                continue
-
     return results[:20]
 
 def extract_blog_text_and_photos(raw_url):
-    """네이버 블로그 단독/묶음/슬라이드 이미지 전수 추출 + r.jina.ai 백업으로 고화질 사진(최대 13장) 100% 확보"""
+    """직통 HTML + r.jina.ai 마크다운 병행 추출로 본문과 고화질 사진(최대 10장) 100% 확보"""
     url = normalize_target_url(raw_url)
-    is_naver_blog = ("blog.naver.com" in url)
-
-    fetch_target = url
-    if is_naver_blog:
-        m_post = re.search(r"blog\.naver\.com/([a-zA-Z0-9_-]+)/(\d+)", url)
-        if m_post:
-            fetch_target = f"https://blog.naver.com/PostView.naver?blogId={m_post.group(1)}&logNo={m_post.group(2)}&redirect=Dlog&widgetTypeCall=true&directAccess=false"
-
-    final_url, page_html = fetch_html_smart(fetch_target, referer="https://m.blog.naver.com/")
-    if not page_html and fetch_target != url:
-        final_url, page_html = fetch_html_smart(url, referer="https://m.blog.naver.com/")
+    final_url, page_html = fetch_html_smart(url)
 
     bad_words = [
         "logo", "icon", "banner", "btn", "ad", "sprite", "1x1", "avatar",
         "profile", "blank", "emoticon", "sticker", "map", "static.naver",
         "blogpfthumb", "ogq", "gfmarket", "storep", "transparent",
         "journalist", "reporter", "sns_", "copyright", "qr", "btn_", "svg",
-        "se-sticker", "link_thumb", "oglink", "dthumb-phinf", "shopping", "adpost", "phaser"
+        "se-sticker", "link_thumb", "oglink"
     ]
     saved_images_bytes = []
     ai_thumbs = []
@@ -853,7 +794,7 @@ def extract_blog_text_and_photos(raw_url):
 
         dl_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Referer": "https://m.blog.naver.com/" if is_naver_blog else final_url,
+            "Referer": final_url,
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         }
         for cand_u in candidates:
@@ -868,22 +809,19 @@ def extract_blog_text_and_photos(raw_url):
         return None
 
     def download_and_save_single_img(raw_img_url):
-        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"').rstrip(")")
+        u_clean = html.unescape(raw_img_url).strip().rstrip("\\").rstrip("'").rstrip('"')
         if u_clean.startswith("//"):
             u_clean = "https:" + u_clean
         elif u_clean.startswith("/"):
             u_clean = urllib.parse.urljoin(final_url, u_clean)
-        low_u = u_clean.lower()
-        if not u_clean.startswith("http") or any(b in low_u for b in bad_words):
-            return None
-        if is_naver_blog and not any(h in low_u for h in ("postfiles.pstatic.net", "blogfiles.pstatic.net", "mblogthumb-phinf.pstatic.net")):
+        if not u_clean.startswith("http") or any(b in u_clean.lower() for b in bad_words):
             return None
 
         path_only = urllib.parse.urlparse(u_clean).path
-        base_key = path_only if ("pstatic.net" in low_u or "nateimg.co.kr" in low_u) else u_clean.split("?")[0]
+        base_key = path_only if ("pstatic.net" in u_clean or "nateimg.co.kr" in u_clean) else u_clean.split("?")[0]
         if base_key in url_to_photo_tag:
             return url_to_photo_tag[base_key]
-        if base_key in tried_urls or len(saved_images_bytes) >= 13:
+        if base_key in tried_urls or len(saved_images_bytes) >= 10:
             return None
         tried_urls.add(base_key)
 
@@ -892,7 +830,7 @@ def extract_blog_text_and_photos(raw_url):
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
-                if im.size[0] < 220 or im.size[1] < 180:
+                if im.size[0] < 200 or im.size[1] < 160:
                     return None
                 edited_im = process_unique_image(im, apply_crop=True)
                 buf = io.BytesIO()
@@ -922,15 +860,14 @@ def extract_blog_text_and_photos(raw_url):
             if t_m:
                 page_title = html.unescape(t_m.group(1)).strip()
 
+        og_img_m = re.search(r'(?:property|name)=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', page_html, re.IGNORECASE)
+        og_img_url = html.unescape(og_img_m.group(1)).strip() if og_img_m else ""
+
         body_html = ""
-        se_start = re.search(r'class=["\'][^"\']*se-main-container[^"\']*["\']', page_html, re.IGNORECASE)
+        se_start = re.search(r'<div[^>]+class=["\'][^"\']*se-main-container[^"\']*["\'][^>]*>', page_html, re.IGNORECASE)
         if se_start:
-            sub_html = page_html[se_start.start():]
-            end_m = re.search(
-                r'(?:<!--\s*SE_DOC_HEADER_END\s*-->|id=["\'](?:post-bottom|commentArea|tagList)["\']|class=["\'][^"\']*(?:post_tag|btn_like_area|post_writer|another_category|recommend_post|comment_area))',
-                sub_html,
-                re.IGNORECASE
-            )
+            sub_html = page_html[se_start.end():]
+            end_m = re.search(r'(?:<!--\s*//\s*SE_DOC_HEADER_END|<div[^>]+class=["\'][^"\']*(?:post_tag|section_t1|btn_like_area|post_writer|another_category|recommend_post|comment_area))', sub_html, re.IGNORECASE)
             body_html = sub_html[:end_m.start()] if end_m else sub_html
         else:
             for pattern in [
@@ -953,7 +890,7 @@ def extract_blog_text_and_photos(raw_url):
 
         def replace_media_tag(match):
             tag_str = match.group(0)
-            if "oglink" in tag_str.lower() or "profile" in tag_str.lower() or "link_thumb" in tag_str.lower():
+            if "oglink" in tag_str.lower() or "profile" in tag_str.lower():
                 return "\n"
             candidate_src = ""
             linkdata_m = re.search(r'data-linkdata=["\']([^"\']+)["\']', tag_str, re.IGNORECASE)
@@ -973,12 +910,12 @@ def extract_blog_text_and_photos(raw_url):
             marker = download_and_save_single_img(candidate_src)
             return f"\n{marker}\n" if marker else "\n"
 
-        html_with_markers = re.sub(r"<(?:img|a)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
+        html_with_markers = re.sub(r"<(?:img|a|div)\b[^>]*>", replace_media_tag, clean_html, flags=re.IGNORECASE)
 
-        if len(saved_images_bytes) < 13:
-            scan_target = html.unescape(body_html).replace("\\/", "/")
+        if len(saved_images_bytes) < 10:
+            scan_target = html.unescape(body_html if se_start else page_html)
             raw_cdn_imgs = re.findall(
-                r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\)]+|(?:https?:)?//[^"\'\s<>\\)]*nateimg\.co\.kr/[^"\'\s<>\\)]+',
+                r'(?:https?:)?//(?:postfiles|blogfiles|mblogthumb-phinf|ssl|imgnews)\.pstatic\.net/[^"\'\s<>\\]+|(?:https?:)?//[^"\'\s<>\\]*nateimg\.co\.kr/[^"\'\s<>\\]+',
                 scan_target,
                 re.IGNORECASE,
             )
@@ -987,17 +924,22 @@ def extract_blog_text_and_photos(raw_url):
                 mk = download_and_save_single_img(r_url)
                 if mk and mk not in extra_markers:
                     extra_markers.append(mk)
-                if len(saved_images_bytes) >= 13:
+                if len(saved_images_bytes) >= 10:
                     break
             if extra_markers:
                 html_with_markers += "\n" + "\n".join(extra_markers)
+
+        if len(saved_images_bytes) == 0 and og_img_url:
+            mk = download_and_save_single_img(og_img_url)
+            if mk:
+                html_with_markers = f"{mk}\n" + html_with_markers
 
         text_only = re.sub(r"<[^>]+>", "\n", html_with_markers)
         lines = [line.strip() for line in html.unescape(text_only).splitlines() if line.strip()]
         body_res = "\n".join(lines)[:12000]
 
-    # 경로 B: 직통 HTML에서 본문이 짧거나, 네이버 블로그에서 사진이 3장 미만일 때 r.jina.ai 백업으로 나머지 사진 전수 보충
-    if len(body_res.strip()) < 80 or (is_naver_blog and len(saved_images_bytes) < 3):
+    # 경로 B: 본문이 부족하거나, 네이버 블로그에서 지연 로딩으로 사진이 1장 이하만 잡혔을 때 r.jina.ai 렌더링 결과에서 나머지 사진 10장까지 추가 수집
+    if len(body_res.strip()) < 80 or ("blog.naver.com" in url and len(saved_images_bytes) <= 1):
         try:
             md_text = fetch_via_jina_reader(url)
             if md_text and len(md_text.strip()) >= 80:
@@ -1007,21 +949,13 @@ def extract_blog_text_and_photos(raw_url):
                         page_title = title_m.group(1).strip()
 
                 md_body = md_text.split("Markdown Content:", 1)[1] if "Markdown Content:" in md_text else md_text
-                md_cut = re.split(r'\n(?:#+\s*이 블로그의 다른 글|이 블로그\s*카테고리\s*글|공감\s*\d+\s*댓글)', md_body)[0]
 
                 def replace_md_img(m):
                     img_u = m.group(1).strip()
                     mk = download_and_save_single_img(img_u)
                     return f"\n{mk}\n" if mk else "\n"
 
-                md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_cut)
-
-                if len(saved_images_bytes) < 13:
-                    for extra_u in re.findall(r'https?://(?:postfiles|blogfiles|mblogthumb-phinf)\.pstatic\.net/[^\s\)"\'<>]+', md_cut):
-                        download_and_save_single_img(extra_u)
-                        if len(saved_images_bytes) >= 13:
-                            break
-
+                md_with_markers = re.sub(r"!\[[^\]]*\]\((https?://[^\s\)]+)\)", replace_md_img, md_body)
                 if len(body_res.strip()) < 80:
                     md_clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", md_with_markers)
                     lines = [ln.strip() for ln in md_clean.splitlines() if ln.strip() and not ln.strip().startswith(("URL Source:", "Published Time:"))]
@@ -1139,7 +1073,7 @@ with left_col:
     mode_urls_key = f"urls_{cur_mode}"
 
     if cur_mode == "fashion":
-        st.markdown('<div class="mode-banner-fashion">👗 현재 모드: [패션·착장 분석 전용] — 아이템·브랜드·컬러 배색·실생활 코디 팁 중심으로 작성합니다. (900~1,200자 · 사진 최대 13장)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="mode-banner-fashion">👗 현재 모드: [패션·착장 분석 전용] — 아이템·브랜드·컬러 배색·실생활 코디 팁 중심으로 작성합니다.</div>', unsafe_allow_html=True)
     elif cur_mode == "issue":
         st.markdown('<div class="mode-banner-issue">🔥 현재 모드: [연예인 이슈·근황 전용] — 사건·방송 핵심 요약, 대중 반응, 비하인드 스토리 중심으로 작성합니다.</div>', unsafe_allow_html=True)
     else:
@@ -1226,59 +1160,30 @@ with left_col:
             key=f"extra_note_{cur_mode}"
         )
 
-        # 탭 2(이슈 모드) 전용: 기본 장문 vs 모바일 핵심 요약(숏폼) 선택
-        is_short_issue = False
-        if is_issue:
-            issue_len_mode = st.radio(
-                "이슈 원고 분량 & 사진 개수 선택",
-                [
-                    "📄 기본 상위 5% 모드 (공백 제외 1,500~2,000자 · 사진 최대 10장)",
-                    "⚡ 모바일 숏폼·핵심 요약 모드 (공백 제외 600~900자 · 사진 최대 3장)"
-                ],
-                horizontal=True,
-                key="radio_issue_len"
-            )
-            is_short_issue = issue_len_mode.startswith("⚡")
-
         btn_label = "🔥 [이슈 모드] 선택한 문체로 입력한 URL 일괄 변환 & 보관함 저장" if is_issue else "👗 [패션 모드] 선택한 문체로 입력한 URL 일괄 변환 & 보관함 저장"
         if st.button(btn_label, type="primary", use_container_width=True, key=f"btn_gen_{cur_mode}"):
             urls = [u.strip() for u in url_box.splitlines() if u.strip().startswith("http")]
             if not urls:
                 st.warning("URL 입력창에 유효한 웹 주소(https://...)를 하나 이상 입력해 주세요!")
             else:
-                mode_tag = ("[이슈·숏폼]" if is_short_issue else "[이슈]") if is_issue else "[패션]"
-                if is_issue:
-                    active_rules = ISSUE_SHORT_FORMAT_RULES if is_short_issue else ISSUE_FORMAT_RULES
-                else:
-                    active_rules = FASHION_FORMAT_RULES
+                mode_tag = "[이슈]" if is_issue else "[패션]"
+                active_rules = ISSUE_FORMAT_RULES if is_issue else FASHION_FORMAT_RULES
                 sys_prompt = DEFAULT_STYLES[style_choice] + active_rules
                 generated_any = False
 
                 for idx, target_u in enumerate(urls, start=1):
-                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 원고 일괄 작성 중..."):
+                    with st.spinner(f"[{idx}/{len(urls)}] {mode_tag} 본문·고화질 사진 추출 및 상위 5% 원고 일괄 작성 중..."):
                         try:
                             p_title, o_body, img_bytes_list, ai_thumbs = extract_blog_text_and_photos(target_u)
                             if len(o_body.strip()) < 50:
                                 raise ValueError("해당 URL에서 본문을 읽어오지 못했습니다. 주소가 올바른지 확인해 주세요.")
 
-                            if is_short_issue:
-                                img_bytes_list = img_bytes_list[:3]
-                                ai_thumbs = ai_thumbs[:3]
-                            elif is_issue:
-                                img_bytes_list = img_bytes_list[:10]
-                                ai_thumbs = ai_thumbs[:10]
-
                             img_cnt = len(img_bytes_list)
-                            if is_issue and is_short_issue:
-                                len_inst = "1. 모바일에서 빠르게 읽히는 '공백 제외 600자 ~ 900자' 핵심 요약 숏폼 분량으로 군더더기 없이 작성해 줘!\n"
-                                mode_inst = "2. [연예인 이슈·숏폼 모드]: 핵심 사건 팩트와 대중 반응만 임팩트 있게 요약해 줘!\n"
-                            elif is_issue:
-                                len_inst = "1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 풍성하게 작성해 줘!\n"
-                                mode_inst = "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
-                            else:
-                                len_inst = "1. 가독성이 가장 좋은 '공백 제외 900자 ~ 1,200자' 분량을 정확히 맞춰 알차게 작성해 줘!\n"
-                                mode_inst = "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
-
+                            mode_inst = (
+                                "2. [연예인 이슈·근황 모드]: 옷·가방 코디 추천은 쓰지 말고 사건·방송·SNS 근황 전말과 대중 반응을 스토리텔링해 줘!\n"
+                                if is_issue
+                                else "2. [패션·착장 분석 모드]: 각 인물 섹션마다 서로 다른 착장 사진 2~3장을 배치하고 컬러 배색·실생활 코디 팁을 포함해 줘!\n"
+                            )
                             photo_guide = (
                                 f"4. 첨부된 실제 사진 {img_cnt}장을 확인하고 각 [사진 N] 위아래에 실제 장면·착장과 일치하는 내용을 써줘.\n"
                                 if img_cnt > 0
@@ -1286,7 +1191,7 @@ with left_col:
                             )
                             prompt_txt = (
                                 f"[중요 지시사항]\n"
-                                f"{len_inst}"
+                                f"1. 네이버 상위 5% 애드포스트 기준인 '공백 제외 1,500자 ~ 2,000자' 분량을 정확히 맞춰 풍성하게 작성해 줘!\n"
                                 f"{mode_inst}"
                                 f"3. 자기소개 멘트 절대 금지! 맨 위 [제목 추천 1], [제목 추천 2] 직후 바로 핵심 내용으로 시작해.\n"
                                 f"{photo_guide}"
@@ -1298,8 +1203,7 @@ with left_col:
                             prompt_txt += f"\n[원본 제목]: {p_title}\n\n[참고 원문 및 사진 순서표]:\n{o_body}"
 
                             contents = [prompt_txt]
-                            max_ai_imgs = 3 if is_short_issue else (10 if is_issue else 13)
-                            for i_idx, th in enumerate(ai_thumbs[:max_ai_imgs], start=1):
+                            for i_idx, th in enumerate(ai_thumbs[:10], start=1):
                                 contents.append(f"[첨부 사진 {i_idx}번]")
                                 contents.append(th)
 
@@ -1317,7 +1221,7 @@ with left_col:
                             plain_clean = strip_all_markers(body_clean)
                             c_len = len(re.sub(r"\s+", "", plain_clean))
                             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:22]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
+                            label_str = f"{ts_str[:15]}_{mode_tag}_{p_title[:24]} [고화질사진 {img_cnt}장 · 공백제외 {c_len}자]"
 
                             st.session_state[mode_archive_key].insert(0, {
                                 "id": ts_str,
